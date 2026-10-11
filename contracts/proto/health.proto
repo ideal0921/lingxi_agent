@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+// 跨语言契约（M1）：网关与各域的服务健康检查。
+// 生成命令见 scripts/gen-proto.sh。
+package lingxi.health.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto;healthv1";
+
+service HealthService {
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {
+  // 调用方服务名，如 gateway-go / core-java / ai-python
+  string service = 1;
+}
+
+message PingResponse {
+  string status = 1; // ok
+  string service = 2;
+  int64 timestamp_ms = 3;
+}

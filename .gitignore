@@ -1,0 +1,30 @@
+# 通用忽略
+.DS_Store
+*.log
+.env
+.env.*
+
+# Go
+gateway-go/bin/
+
+# Java
+core-java/**/target/
+
+# Python
+ai-python/.venv/
+ai-python/__pycache__/
+ai-python/.pytest_cache/
+ai-python/*.egg-info/
+ai-python/dist/
+
+# Node
+web-vue3/node_modules/
+web-vue3/dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Helm
+deploy/offline/images/
