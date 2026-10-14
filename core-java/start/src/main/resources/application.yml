@@ -4,12 +4,86 @@ server:
 spring:
   application:
     name: lingxi-core
+  servlet:
+    multipart:
+      # 知识库上传上限（单请求上传；超大文档走分片上传通道）
+      max-file-size: ${LINGXI_KB_UPLOAD_MAX_SIZE:524288000}
+      max-request-size: ${LINGXI_KB_UPLOAD_MAX_SIZE:524288000}
+  # 本地中间件接线：MySQL 业务库 / Redis 缓存与队列（本地单机）。
+  # 默认值指向本地，生产部署通过 LINGXI_DB_* / LINGXI_REDIS_* 环境变量覆盖。
+  datasource:
+    url: ${LINGXI_DB_URL:jdbc:mysql://127.0.0.1:3306/lingxi?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8}
+    username: ${LINGXI_DB_USER:root}
+    password: ${LINGXI_DB_PASSWORD:ideal0921}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      initialization-fail-timeout: 30000
+  data:
+    redis:
+      host: ${LINGXI_REDIS_HOST:127.0.0.1}
+      port: ${LINGXI_REDIS_PORT:6379}
+      database: 0
+      timeout: 3s
+  # 业务表幂等建表（工单域 lingxi_ticket 等）
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+  # 事件总线（M3-3.8 流式全链路）：仅当 lingxi.kafka.enabled=true 时连接集群
+  kafka:
+    bootstrap-servers: ${LINGXI_KAFKA_BOOTSTRAP_SERVERS:127.0.0.1:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # 简化本地开发：单副本集群下 acks=1 即可，无需等待全副本确认
+      acks: 1
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: latest  # 冷启动只消费新消息，避免重放历史 AI 回答
+
+# 灵犀事件总线开关与主题（关闭时不装配 Kafka 生产者/消费者，本地无 Kafka 也可启动）
+lingxi:
+  kafka:
+    enabled: ${LINGXI_KAFKA_ENABLED:false}
+    topic:
+      session-message: ${LINGXI_KAFKA_TOPIC_SESSION_MESSAGE:lingxi.session.message}
+      ai-reply: ${LINGXI_KAFKA_TOPIC_AI_REPLY:lingxi.ai.reply}
+      # 上下文窗口（M3-3.11）：AI 域压缩旧消息后回写会话摘要
+      session-summary: ${LINGXI_KAFKA_TOPIC_SESSION_SUMMARY:lingxi.session.summary}
+      # 知识库入库链路（M3-3.2）：投递入库任务 / 消费入库结果 / 投递下线清理
+      kb-ingest: ${LINGXI_KAFKA_TOPIC_KB_INGEST:kb.doc.ingest}
+      kb-indexed: ${LINGXI_KAFKA_TOPIC_KB_INDEXED:kb.doc.indexed}
+      kb-delete: ${LINGXI_KAFKA_TOPIC_KB_DELETE:kb.doc.delete}
+    consumer-group: ${LINGXI_KAFKA_CONSUMER_GROUP_CORE:core-java}
+  session:
+    # 上下文窗口（M3-3.11）：随用户消息事件带给 AI 域的「近 N 轮」消息条数上限。
+    # 需大于 AI 侧的保持窗口（LINGXI_AGENT_HISTORY_MAX_MESSAGES=20），
+    # 否则落在窗口外的旧消息不会出现在事件中、摘要无从产生。
+    history-limit: ${LINGXI_SESSION_HISTORY_LIMIT:40}
+  kb:
+    minio:
+      # 对象存储（本地复用 Milvus 的 minio 容器；生产改用 OSS 时替换端点与凭据）
+      endpoint: ${LINGXI_KB_MINIO_ENDPOINT:http://127.0.0.1:9000}
+      access-key: ${LINGXI_KB_MINIO_ACCESS_KEY:minioadmin}
+      secret-key: ${LINGXI_KB_MINIO_SECRET_KEY:minioadmin}
+      bucket: ${LINGXI_KB_MINIO_BUCKET:lingxi-kb}
+      presign-expiry-seconds: ${LINGXI_KB_MINIO_PRESIGN_EXPIRY:3600}
+    upload:
+      tmp-dir: ${LINGXI_KB_UPLOAD_TMP_DIR:${java.io.tmpdir}/lingxi-kb-uploads}
+      part-size-bytes: ${LINGXI_KB_UPLOAD_PART_SIZE:5242880}
+      max-file-size-bytes: ${LINGXI_KB_UPLOAD_MAX_SIZE:524288000}
 
 management:
   endpoints:
     web:
       exposure:
         include: health,info
+  endpoint:
+    health:
+      show-details: always
 
 logging:
   level:

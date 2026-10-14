@@ -21,6 +21,9 @@
     <modules>
         <module>common</module>
         <module>gateway-api</module>
+        <module>session</module>
+        <module>ticket</module>
+        <module>knowledge</module>
         <module>start</module>
     </modules>
 
@@ -30,5 +33,7 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- 对象存储客户端（知识库原始文件，M3-3.2） -->
+        <minio.version>8.5.12</minio.version>
     </properties>
 </project>

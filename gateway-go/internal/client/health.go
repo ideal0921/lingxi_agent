@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	healthv1 "github.com/lingxi/gateway-go/proto"
+	healthv1 "github.com/lingxi/gateway-go/proto/healthv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )

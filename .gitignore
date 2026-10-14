@@ -3,6 +3,8 @@
 *.log
 .env
 .env.*
+# 环境变量模板需入库（供他人复制为 .env），故对示例文件开例外
+!.env.example
 
 # Go
 gateway-go/bin/
@@ -12,7 +14,8 @@ core-java/**/target/
 
 # Python
 ai-python/.venv/
-ai-python/__pycache__/
+__pycache__/
+*.py[cod]
 ai-python/.pytest_cache/
 ai-python/*.egg-info/
 ai-python/dist/

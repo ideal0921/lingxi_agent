@@ -5,13 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-python"
 version = "1.0.0"
-description = "AI 域：Agent/RAG/LLM 网关（M1 骨架）"
+description = "AI 域：Agent/RAG/LLM 网关"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.4.0",
     "httpx>=0.27.0",
+    # 知识库解析依赖（M3：各类型文档精细化解析，见 app/rag/ingest/parser）
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.23",
+    "openpyxl>=3.1.0",
+    "pdfplumber>=0.11.0",
+    # 知识库向量检索（M3-3.5：Milvus 集合与入库管道）
+    "pymilvus>=2.4.0",
+    # 本地稀疏词权重（M3-3.4 方案 C：jieba 分词 + BM25 风格 TF）
+    "jieba>=0.42.1",
+    # Agent 运行时图编排（M3-3.7）；按架构风险项锁定主版本，升级需回归 Golden Set
+    "langgraph>=1.2.0,<2.0.0",
+    # 事件总线（M3-3.8 流式全链路：消费会话消息、生产流式片段）
+    "aiokafka>=0.11.0",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +34,7 @@ dev = [
     "ruff>=0.6",
     "grpcio>=1.60",
     "grpcio-tools>=1.60",
+    "reportlab>=4.0",  # 仅测试用：生成 PDF 样本验证解析链路
 ]
 
 [tool.setuptools.packages.find]

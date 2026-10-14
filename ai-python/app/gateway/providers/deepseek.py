@@ -1,26 +1,19 @@
-"""DeepSeek Provider：基于 OpenAI 兼容协议的非流式调用。"""
-
-import httpx
+"""DeepSeek Provider：OpenAI 兼容协议接入（降级链主模型）。"""
 
 from app.config import settings
-from app.gateway.providers.base import BaseProvider
+from app.gateway.providers.openai_compat import _STREAM_END, OpenAICompatibleProvider
+
+# 兼容既有引用（测试与外部按模块名导入 SSE 哨兵）
+__all__ = ["_STREAM_END", "DeepSeekProvider"]
 
 
-class DeepSeekProvider(BaseProvider):
-    """DeepSeek 模型接入（M1 主模型）。"""
+class DeepSeekProvider(OpenAICompatibleProvider):
+    """DeepSeek 接入（M1 主模型，降级链首位）。"""
 
-    name = "deepseek"
-
-    async def chat(self, prompt: str, model: str | None = None, timeout: float = 30.0) -> str:
-        url = f"{settings.deepseek_base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {settings.deepseek_api_key}"}
-        payload = {
-            "model": model or settings.deepseek_model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        }
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-        return data["choices"][0]["message"]["content"]
+    def __init__(self, config=settings) -> None:
+        super().__init__(
+            name="deepseek",
+            api_key=config.deepseek_api_key,
+            base_url=config.deepseek_base_url,
+            model=config.deepseek_model,
+        )

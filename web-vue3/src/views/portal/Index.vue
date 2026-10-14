@@ -1,52 +1,184 @@
 <template>
-  <!-- M1 用户端骨架页：验证请求封装与 SSE 流式渲染链路 -->
-  <n-card title="灵犀智能客服（骨架验证页）" style="max-width: 720px; margin: 40px auto">
-    <n-space vertical>
-      <n-input
-        v-model:value="prompt"
-        placeholder="输入问题，验证 LLM 网关链路"
-        @keyup.enter="send"
-      />
-      <n-button type="primary" :loading="loading" @click="send">发送</n-button>
-      <n-divider />
-      <pre class="answer">{{ answer }}</pre>
+  <!-- M2-A4 用户端会话页：WSS 实时收发、断连自动重连 + resume 续传 -->
+  <n-card
+    title="灵犀智能客服"
+    style="max-width: 720px; margin: 24px auto"
+    :bordered="true"
+  >
+    <template #header-extra>
+      <n-tag :type="statusTagType" size="small" round>{{ statusText }}</n-tag>
+    </template>
+
+    <n-space vertical :size="12">
+      <n-alert v-if="error" type="warning" :show-icon="false" closable @close="error = ''">
+        {{ error }}
+      </n-alert>
+
+      <!-- 消息列表 -->
+      <div ref="listEl" class="chat-list">
+        <n-empty
+          v-if="messages.length === 0"
+          description="发送第一条消息，开始会话"
+          size="small"
+        />
+        <div
+          v-for="msg in messages"
+          :key="msg.id || msg.seq"
+          class="chat-row"
+          :class="msg.sender"
+        >
+          <div class="bubble">
+            {{ msg.content }}<span v-if="msg.streaming" class="caret">▍</span>
+          </div>
+          <div class="meta">{{ senderLabel(msg.sender) }} · {{ msg.seq || '…' }}</div>
+        </div>
+      </div>
+
+      <!-- 输入区 -->
+      <n-space align="center">
+        <n-input
+          v-model:value="draft"
+          placeholder="输入消息，回车发送"
+          :disabled="!connected"
+          @keyup.enter="submit"
+        />
+        <n-button type="primary" :disabled="!connected || !draft.trim()" @click="submit">
+          发送
+        </n-button>
+        <n-button v-if="!connected" size="small" @click="reconnect">重连</n-button>
+      </n-space>
     </n-space>
   </n-card>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
-import { NCard, NInput, NButton, NSpace, NDivider } from 'naive-ui'
-import { streamChat } from '../../api/sse'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { NCard, NSpace, NInput, NButton, NTag, NAlert, NEmpty } from 'naive-ui'
+import { useChat } from '../../composables/useChat'
+import type { WsStatus } from '../../api/wss'
 
-const prompt = ref('')
-const answer = ref('')
-const loading = ref(false)
+const { messages, status, error, init, send, reconnect } = useChat()
 
-// M1 直连 AI 域验证接口；M3 接入完整会话链路后替换为 /api/v1/chat 流式接口
-async function send() {
-  if (!prompt.value || loading.value) return
-  loading.value = true
-  answer.value = ''
-  try {
-    await streamChat('http://localhost:8082/api/v1/generate', { prompt: prompt.value }, {
-      onChunk: (text) => {
-        // 该接口暂为 JSON 一次性返回，此处演示 chunk 渲染；SSE 化在 M3 实现
-        answer.value += text
-      },
-    })
-  } catch (err) {
-    answer.value = `调用失败: ${err}`
-  } finally {
-    loading.value = false
+const draft = ref('')
+const listEl = ref<HTMLElement | null>(null)
+
+// 用户标识：本地持久化，联调环境固定 demo 用户。
+const USER_KEY = 'lingxi_user_id'
+let userId = localStorage.getItem(USER_KEY) ?? 'demo-user'
+if (!localStorage.getItem(USER_KEY)) {
+  localStorage.setItem(USER_KEY, userId)
+}
+
+onMounted(() => {
+  void init(userId)
+})
+
+const connected = computed(() => status.value === 'connected')
+
+const statusText = computed(() => {
+  const map: Record<WsStatus, string> = {
+    connecting: '连接中…',
+    connected: '在线',
+    reconnecting: '重连中…',
+    disconnected: '已断开',
   }
+  return map[status.value] ?? '未知'
+})
+
+const statusTagType = computed(() => {
+  const map: Record<WsStatus, 'success' | 'warning' | 'error' | 'default'> = {
+    connecting: 'warning',
+    connected: 'success',
+    reconnecting: 'warning',
+    disconnected: 'error',
+  }
+  return map[status.value] ?? 'default'
+})
+
+function senderLabel(sender: string): string {
+  return sender === 'agent' ? '客服' : '我'
+}
+
+async function submit(): Promise<void> {
+  const text = draft.value.trim()
+  if (!text || !connected.value) return
+  draft.value = ''
+  send(text)
+  await nextTick()
+  scrollToBottom()
+}
+
+// 消息数量或流式内容增长时滚动到底部（打字机过程中内容变化不改变数量）。
+watch(
+  () => [messages.value.length, messages.value.reduce((total, msg) => total + msg.content.length, 0)],
+  async () => {
+    await nextTick()
+    scrollToBottom()
+  },
+)
+
+function scrollToBottom(): void {
+  if (listEl.value) listEl.value.scrollTop = listEl.value.scrollHeight
 }
 </script>
 
 <style scoped>
-.answer {
-  white-space: pre-wrap;
+.chat-list {
+  height: 420px;
+  overflow-y: auto;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  padding: 12px;
+  background: #fafafa;
+}
+
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+}
+
+.chat-row.user {
+  align-items: flex-end;
+}
+
+.chat-row.agent {
+  align-items: flex-start;
+}
+
+.bubble {
+  max-width: 70%;
+  padding: 8px 12px;
+  border-radius: 8px;
   word-break: break-word;
-  min-height: 120px;
+  white-space: pre-wrap;
+}
+
+.chat-row.user .bubble {
+  background: #2080f0;
+  color: #fff;
+}
+
+.chat-row.agent .bubble {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+}
+
+.meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #999;
+}
+
+/* 流式打字机光标：仅在 streaming 状态下闪烁，提示回答仍在生成 */
+.caret {
+  margin-left: 1px;
+  animation: caret-blink 1s step-start infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
 }
 </style>

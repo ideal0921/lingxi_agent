@@ -13,8 +13,8 @@ export PATH="$(go env GOPATH)/bin:$PATH"   # 供 protoc-gen-go / protoc-gen-go-g
 echo "==> 生成 Go 契约（gateway-go/proto）"
 mkdir -p "$ROOT/gateway-go/proto"
 $PROTOC -I "$PROTO_DIR" \
-  --go_out="$ROOT/gateway-go/proto" --go_opt=paths=source_relative \
-  --go-grpc_out="$ROOT/gateway-go/proto" --go-grpc_opt=paths=source_relative \
+  --go_out="$ROOT/gateway-go" --go_opt=module=github.com/lingxi/gateway-go \
+  --go-grpc_out="$ROOT/gateway-go" --go-grpc_opt=module=github.com/lingxi/gateway-go \
   "$PROTO_DIR"/*.proto
 
 echo "==> Java 契约由 Maven 生成：cd core-java && mvn -q -B -pl gateway-api generate-sources"

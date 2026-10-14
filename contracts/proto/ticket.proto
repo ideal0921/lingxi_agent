@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+// 工单域契约（M2-B）：工单创建/流转/关闭。
+// 由 Java 业务域实现（MySQL 持久化），Go 网关经 gRPC 转发工作台调用。
+package lingxi.ticket.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto/ticketv1";
+
+// 工单状态：单向流转（CREATED → PROCESSING → CLOSED），关闭为终态。
+// 非法流转与重复关闭由 Java 工单域拒绝。
+enum TicketStatus {
+  TICKET_STATUS_UNSPECIFIED = 0;
+  CREATED = 1;
+  PROCESSING = 2;
+  CLOSED = 3;
+}
+
+message Ticket {
+  string ticket_id = 1;
+  string tenant_id = 2;
+  string session_id = 3;      // 来源会话（一键建单关联）
+  string user_id = 4;
+  string agent_id = 5;        // 处理坐席
+  string title = 6;
+  string description = 7;
+  TicketStatus status = 8;
+  int64 created_at_ms = 9;
+  int64 updated_at_ms = 10;
+}
+
+// 建单（坐席一键建单）
+message CreateTicketRequest {
+  string tenant_id = 1;
+  string session_id = 2;
+  string user_id = 3;
+  string agent_id = 4;
+  string title = 5;
+  string description = 6;
+}
+
+message CreateTicketResponse {
+  Ticket ticket = 1;
+}
+
+// 状态流转
+message UpdateTicketStatusRequest {
+  string ticket_id = 1;
+  TicketStatus target_status = 2;
+  string operator = 3;        // 操作者（坐席 ID）
+}
+
+message UpdateTicketStatusResponse {
+  bool ok = 1;
+  string reason = 2;          // 拒绝原因（非法流转时非空）
+  Ticket ticket = 3;
+}
+
+// 工单列表（按坐席或状态过滤）
+message ListTicketsRequest {
+  string agent_id = 1;
+  TicketStatus status = 2;    // 不传表示全部
+}
+
+message ListTicketsResponse {
+  repeated Ticket tickets = 1;
+}
+
+// 工单域服务：由 Java 实现，Go 网关通过 gRPC 调用
+service TicketService {
+  rpc CreateTicket(CreateTicketRequest) returns (CreateTicketResponse);
+  rpc UpdateTicketStatus(UpdateTicketStatusRequest) returns (UpdateTicketStatusResponse);
+  rpc ListTickets(ListTicketsRequest) returns (ListTicketsResponse);
+}

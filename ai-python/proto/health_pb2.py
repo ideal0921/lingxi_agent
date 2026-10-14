@@ -24,14 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0chealth.proto\x12\x10lingxi.health.v1\"\x1e\n\x0bPingRequest\x12\x0f\n\x07service\x18\x01 \x01(\t\"E\n\x0cPingResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0f\n\x07service\x18\x02 \x01(\t\x12\x14\n\x0ctimestamp_ms\x18\x03 \x01(\x03\x32V\n\rHealthService\x12\x45\n\x04Ping\x12\x1d.lingxi.health.v1.PingRequest\x1a\x1e.lingxi.health.v1.PingResponseB-Z+github.com/lingxi/gateway-go/proto;healthv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0chealth.proto\x12\x10lingxi.health.v1\"\x1e\n\x0bPingRequest\x12\x0f\n\x07service\x18\x01 \x01(\t\"E\n\x0cPingResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0f\n\x07service\x18\x02 \x01(\t\x12\x14\n\x0ctimestamp_ms\x18\x03 \x01(\x03\x32V\n\rHealthService\x12\x45\n\x04Ping\x12\x1d.lingxi.health.v1.PingRequest\x1a\x1e.lingxi.health.v1.PingResponseB-Z+github.com/lingxi/gateway-go/proto/healthv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'health_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'Z+github.com/lingxi/gateway-go/proto;healthv1'
+  _globals['DESCRIPTOR']._serialized_options = b'Z+github.com/lingxi/gateway-go/proto/healthv1'
   _globals['_PINGREQUEST']._serialized_start=34
   _globals['_PINGREQUEST']._serialized_end=64
   _globals['_PINGRESPONSE']._serialized_start=66

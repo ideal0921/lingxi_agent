@@ -2,12 +2,15 @@ package com.lingxi.start.grpc;
 
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.BindableService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 /**
  * gRPC 服务端配置（M1：为网关提供健康检查契约服务，供跨语言链路验收）。
@@ -19,11 +22,13 @@ public class GrpcServerConfig {
     private static final Logger log = LoggerFactory.getLogger(GrpcServerConfig.class);
 
     @Bean(destroyMethod = "shutdownNow")
-    public Server grpcServer(HealthServiceGrpcImpl healthService,
+    public Server grpcServer(List<BindableService> services,
                              @Value("${lingxi.grpc.port:9090}") int port) {
-        Server server = ServerBuilder.forPort(port)
-                .addService(healthService)
-                .build();
+        ServerBuilder<?> builder = ServerBuilder.forPort(port);
+        for (BindableService service : services) {
+            builder.addService(service);
+        }
+        Server server = builder.build();
         try {
             server.start();
             log.info("gRPC 服务已启动，端口 {}", port);

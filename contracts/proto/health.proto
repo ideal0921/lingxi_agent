@@ -4,7 +4,7 @@ syntax = "proto3";
 // 生成命令见 scripts/gen-proto.sh。
 package lingxi.health.v1;
 
-option go_package = "github.com/lingxi/gateway-go/proto;healthv1";
+option go_package = "github.com/lingxi/gateway-go/proto/healthv1";
 
 service HealthService {
   rpc Ping(PingRequest) returns (PingResponse);

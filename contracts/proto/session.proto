@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+// 会话域契约（M2）：会话状态机、消息收发与断连续传。
+// 生成命令见 scripts/gen-proto.sh（Go/Python）与 core-java/gateway-api（Maven 插件）。
+package lingxi.session.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto/sessionv1";
+
+// 会话状态：状态机迁移（M3-3.11 AI 化后）
+//   INIT → {AI_ACTIVE, HUMAN_CHAT, CLOSED}
+//   AI_ACTIVE → {HUMAN_CHAT, CLOSED}（AI 应答中；坐席接管即退出 AI）
+//   HUMAN_CHAT → {CLOSED}
+// 非法迁移与重复关闭必须被拒绝，由 Java 会话域保证。
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  INIT = 1;                 // 待接入
+  HUMAN_CHAT = 2;           // 人工会话中（坐席接管后）
+  CLOSED = 3;               // 已关闭
+  AI_ACTIVE = 4;            // AI 应答中（用户消息触发 AI 后的持续状态）
+}
+
+// 建会话请求
+message CreateSessionRequest {
+  string user_id = 1;      // 用户标识（租户内唯一）
+  string channel = 2;      // 接入渠道：web/h5/app/wechat/feishu
+  string tenant_id = 3;    // 租户标识
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+  SessionState state = 2;
+}
+
+// 发送消息请求
+message SendMessageRequest {
+  string session_id = 1;
+  string sender = 2;       // user / agent / system
+  string sender_id = 3;    // 发送者身份（用户 ID 或坐席 ID）
+  string content = 4;
+}
+
+message SendMessageResponse {
+  string message_id = 1;   // 全局消息 ID（UUID）
+  int64 seq = 2;           // 会话内自增序号，断连续传游标
+  int64 timestamp_ms = 3;
+}
+
+// 会话消息（广播给网关回推客户端）
+message SessionMessage {
+  string message_id = 1;
+  string session_id = 2;
+  string sender = 3;
+  string sender_id = 4;
+  string content = 5;
+  int64 seq = 6;
+  int64 timestamp_ms = 7;
+}
+
+// 状态迁移请求
+message ChangeStateRequest {
+  string session_id = 1;
+  SessionState target_state = 2;
+  string operator = 3;     // 操作者（坐席 ID / system）
+}
+
+message ChangeStateResponse {
+  bool ok = 1;
+  string reason = 2;                 // 拒绝原因（非法迁移时非空）
+  SessionState current_state = 3;
+}
+
+// 断连续传：客户端携带 last_seq，网关/会话域补齐遗漏消息
+message PullMessagesRequest {
+  string session_id = 1;
+  int64 last_seq = 2;
+  int32 limit = 3;                   // 上限，默认 50
+}
+
+message PullMessagesResponse {
+  repeated SessionMessage messages = 1;
+  bool has_more = 2;
+}
+
+// ---------- 客服队列与接管（M2-B）----------
+
+// 会话摘要：工作台会话列表展示用
+message SessionSummary {
+  string session_id = 1;
+  string user_id = 2;
+  SessionState state = 3;
+  string agent_id = 4;               // 已接管坐席（未接管为空）
+  int64 created_at_ms = 5;
+  int64 updated_at_ms = 6;
+  int32 message_count = 7;
+}
+
+// 待接管会话列表（客服队列）
+message ListWaitingSessionsRequest {
+  int32 limit = 1;                   // 拉取条数，默认 20
+}
+
+message ListWaitingSessionsResponse {
+  repeated SessionSummary sessions = 1;
+}
+
+// 客服接管（抢单）：并发下仅成功一次，由会话状态机保证
+message TakeOverRequest {
+  string session_id = 1;
+  string agent_id = 2;
+}
+
+message TakeOverResponse {
+  bool ok = 1;
+  string reason = 2;                 // 失败原因（已被接管/会话已关闭等）
+  SessionState state = 3;
+}
+
+// 指定坐席的会话列表
+message ListAgentSessionsRequest {
+  string agent_id = 1;
+}
+
+message ListAgentSessionsResponse {
+  repeated SessionSummary sessions = 1;
+}
+
+// 会话域服务：由 Java 实现，Go 网关通过 gRPC 调用
+service SessionService {
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  rpc ChangeState(ChangeStateRequest) returns (ChangeStateResponse);
+  rpc PullMessages(PullMessagesRequest) returns (PullMessagesResponse);
+  rpc ListWaitingSessions(ListWaitingSessionsRequest) returns (ListWaitingSessionsResponse);
+  rpc TakeOver(TakeOverRequest) returns (TakeOverResponse);
+  rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse);
+}

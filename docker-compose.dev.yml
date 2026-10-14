@@ -1,22 +1,16 @@
-# 本地开发中间件编排（仅 M1 骨架验证所需组件）
+# 本地开发中间件编排（本地优先策略）
+#
+# 以下中间件已在本机以非容器方式启动，工程默认直接连接本地地址（见各工程配置文件）：
+#   - MySQL   127.0.0.1:3306   用户 root / 密码 ideal0921，业务库 lingxi（启动时自动创建）
+#   - Redis   127.0.0.1:6379   本地单机模式（无密码）
+#   - Nacos   127.0.0.1:8848   默认账号 nacos / nacos
+#
+# 容器版 mysql/redis 已停用，避免与本机端口冲突；如需回归容器方案请先停止本机对应服务。
+# 以下服务为可选补充：
+#   - Kafka  待 M2-B 队列接线前启动（容器 单机）
+#   - Milvus M3 知识库向量检索（standalone：etcd + minio + milvus，首次启动较慢）
+#   - ES     M3 日志检索（应用/审计日志、对话消息全文检索）
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: lingxi-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: lingxi
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql-data:/var/lib/mysql
-
-  redis:
-    image: redis:7-alpine
-    container_name: lingxi-redis
-    ports:
-      - "6379:6379"
-
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
     container_name: lingxi-es
@@ -42,5 +36,47 @@ services:
     ports:
       - "9092:9092"
 
+  # ---- M3 知识库向量检索（可选，standalone：etcd + minio + milvus）----
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    container_name: lingxi-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    volumes:
+      - etcd_data:/etcd
+
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    container_name: lingxi-minio
+    environment:
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    command: minio server /minio_data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/minio_data
+
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: lingxi-milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - etcd
+      - minio
+    volumes:
+      - milvus_data:/var/lib/milvus
+
 volumes:
-  mysql-data:
+  etcd_data:
+  minio_data:
+  milvus_data:

@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "description": "灵犀智能客服 Golden Set v1：覆盖售后/物流/会员三类知识的事实问答、同义改写、边界拒答与幻觉守卫；与 app/evaluator/golden/kb 下的种子知识文档配套。",
+  "cases": [
+    {
+      "id": "refund-time",
+      "query": "退款多久能到账？",
+      "tags": ["退款", "事实"],
+      "expect": {"must_contain": ["1-3个工作日", "3-7个工作日"], "expect_heading": "退款时效"}
+    },
+    {
+      "id": "refund-time-rewrite",
+      "query": "钱一般几天退回到我的账户里？",
+      "tags": ["退款", "改写"],
+      "expect": {"must_contain": ["3-7个工作日"], "expect_heading": "退款时效"}
+    },
+    {
+      "id": "refund-condition",
+      "query": "什么情况下可以无理由退款？",
+      "tags": ["退款", "事实"],
+      "expect": {"must_contain": ["7天"], "any_of": ["不影响二次销售"], "expect_heading": "退款条件"}
+    },
+    {
+      "id": "refund-fresh-food",
+      "query": "生鲜商品可以无理由退款吗？",
+      "tags": ["退款", "边界"],
+      "expect": {"must_contain": ["不支持"], "expect_heading": "退款条件"}
+    },
+    {
+      "id": "refund-invoice",
+      "query": "退款成功之后发票怎么处理？",
+      "tags": ["退款", "发票"],
+      "expect": {"must_contain": ["发票"], "any_of": ["寄回", "作废"], "expect_heading": "发票处理"}
+    },
+    {
+      "id": "exchange-freight",
+      "query": "换货的运费由谁承担？",
+      "tags": ["退款", "换货"],
+      "expect": {"must_contain": ["平台承担"], "expect_heading": "换货流程"}
+    },
+    {
+      "id": "ship-instock",
+      "query": "下单后多久发货？",
+      "tags": ["物流", "事实"],
+      "expect": {"must_contain": ["24小时"], "expect_heading": "发货时效"}
+    },
+    {
+      "id": "ship-presale",
+      "query": "预售商品什么时候发货？",
+      "tags": ["物流", "事实"],
+      "expect": {"must_contain": ["商品页"], "expect_heading": "发货时效"}
+    },
+    {
+      "id": "delivery-normal",
+      "query": "普通快递一般几天能送到？",
+      "tags": ["物流", "事实"],
+      "expect": {"must_contain": ["2-4天"], "expect_heading": "配送时效"}
+    },
+    {
+      "id": "delivery-remote",
+      "query": "新疆发货需要几天？",
+      "tags": ["物流", "边界"],
+      "expect": {"must_contain": ["5-8天"], "expect_heading": "配送时效"}
+    },
+    {
+      "id": "delivery-remote-list",
+      "query": "哪些地区配送时间会更长？",
+      "tags": ["物流", "改写"],
+      "expect": {"any_of": ["新疆", "西藏", "偏远地区"], "expect_heading": "配送时效"}
+    },
+    {
+      "id": "sign-check",
+      "query": "收货时需要注意什么？",
+      "tags": ["物流", "事实"],
+      "expect": {"any_of": ["当面验货", "拒收"], "expect_heading": "签收说明"}
+    },
+    {
+      "id": "sign-compensate",
+      "query": "包装破损了怎么申请补偿？",
+      "tags": ["物流", "边界"],
+      "expect": {"must_contain": ["48小时"], "expect_heading": "签收说明"}
+    },
+    {
+      "id": "freight-free",
+      "query": "订单满多少钱免运费？",
+      "tags": ["物流", "事实"],
+      "expect": {"must_contain": ["99元"], "expect_heading": "运费说明"}
+    },
+    {
+      "id": "freight-cost",
+      "query": "不满足包邮要收多少运费？",
+      "tags": ["物流", "事实"],
+      "expect": {"must_contain": ["10元"], "expect_heading": "运费说明"}
+    },
+    {
+      "id": "points-earn",
+      "query": "消费一元能获得多少积分？",
+      "tags": ["积分", "事实"],
+      "expect": {"must_contain": ["1积分"], "expect_heading": "积分获取"}
+    },
+    {
+      "id": "points-cap",
+      "query": "单笔订单最多能累计多少积分？",
+      "tags": ["积分", "边界"],
+      "expect": {"must_contain": ["5000"], "expect_heading": "积分获取"}
+    },
+    {
+      "id": "points-exchange",
+      "query": "积分可以兑换什么东西？",
+      "tags": ["积分", "事实"],
+      "expect": {"any_of": ["优惠券", "实物礼品"], "expect_heading": "积分兑换"}
+    },
+    {
+      "id": "points-refund",
+      "query": "兑换之后积分可以退回来吗？",
+      "tags": ["积分", "边界"],
+      "expect": {"must_contain": ["不可退回"], "expect_heading": "积分兑换"}
+    },
+    {
+      "id": "member-level",
+      "query": "怎样才能升级为黄金会员？",
+      "tags": ["积分", "事实"],
+      "expect": {"must_contain": ["10000"], "expect_heading": "等级权益"}
+    },
+    {
+      "id": "member-benefit",
+      "query": "黄金会员有什么权益？",
+      "tags": ["积分", "事实"],
+      "expect": {"any_of": ["95折", "专属客服"], "expect_heading": "等级权益"}
+    },
+    {
+      "id": "guard-refund-days",
+      "query": "退款可以 15 天无理由吗？",
+      "tags": ["幻觉守卫"],
+      "expect": {"must_contain": ["7天"], "must_not_contain": ["15天无理由"]}
+    },
+    {
+      "id": "guard-member-lifetime",
+      "query": "黄金会员是终身免费的吗？",
+      "tags": ["幻觉守卫"],
+      "expect": {"any_of": ["10000", "95折"], "must_not_contain": ["终身免费"]}
+    },
+    {
+      "id": "refusal-crypto",
+      "query": "你们支持比特币付款吗？",
+      "tags": ["拒答"],
+      "expect": {"refusal": true}
+    },
+    {
+      "id": "refusal-car",
+      "query": "你们平台卖汽车吗？",
+      "tags": ["拒答"],
+      "expect": {"refusal": true}
+    },
+    {
+      "id": "refusal-stock-price",
+      "query": "你们公司今天的股价是多少？",
+      "tags": ["拒答"],
+      "expect": {"refusal": true}
+    }
+  ]
+}
