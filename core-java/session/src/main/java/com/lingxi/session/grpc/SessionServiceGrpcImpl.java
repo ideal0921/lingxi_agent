@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import com.lingxi.session.ai.SuggestReplyCoordinator;
 import com.lingxi.session.ai.SuggestResult;
+import com.lingxi.session.event.AnalyticsEventPublisher;
 import com.lingxi.session.event.SessionEventPublisher;
 import com.lingxi.session.model.Session;
 import com.lingxi.session.model.SessionMessage;
@@ -33,6 +34,12 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
 
     /** 消息内容长度上限（字符），超出拒绝写入。 */
     private static final int MAX_CONTENT_LEN = 4000;
+    /** 满意度评分上限（1~5 星，越界拒绝）。 */
+    private static final int MAX_RATING = 5;
+    /** 评价内容长度上限（字符），超出截断。 */
+    private static final int MAX_COMMENT_LEN = 500;
+    /** 评价标签长度上限（字符），超出截断。 */
+    private static final int MAX_TAGS_LEN = 255;
 
     private final SessionRepository repository;
     private final SessionEventPublisher eventPublisher;
@@ -42,16 +49,20 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
     private final int summaryPreviewLen;
     /** 坐席快捷回复协调器（M4-4.6）：组装上下文并同步调 AI 生成候选。 */
     private final SuggestReplyCoordinator suggestCoordinator;
+    /** 分析埋点发布端口（M5-5.1）：会话生命周期与满意度事件。 */
+    private final AnalyticsEventPublisher analyticsPublisher;
 
     public SessionServiceGrpcImpl(SessionRepository repository, SessionEventPublisher eventPublisher,
                                   @Value("${lingxi.session.history-limit:20}") int historyLimit,
                                   @Value("${lingxi.session.summary-preview-len:200}") int summaryPreviewLen,
-                                  SuggestReplyCoordinator suggestCoordinator) {
+                                  SuggestReplyCoordinator suggestCoordinator,
+                                  AnalyticsEventPublisher analyticsPublisher) {
         this.repository = repository;
         this.eventPublisher = eventPublisher;
         this.historyLimit = historyLimit;
         this.summaryPreviewLen = summaryPreviewLen;
         this.suggestCoordinator = suggestCoordinator;
+        this.analyticsPublisher = analyticsPublisher;
     }
 
     @Override
@@ -62,6 +73,10 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
             Session session = new Session(request.getTenantId(), request.getUserId(), request.getChannel());
             repository.save(session);
             log.info("创建会话 sessionId={} userId={} channel={}", session.getId(), request.getUserId(), request.getChannel());
+            // M5-5.1 分析埋点：建会话（漏斗分母）
+            analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
+                    AnalyticsEventPublisher.STAGE_CREATED, session.getChannel(),
+                    session.getUserId(), "", "");
 
             observer.onNext(lingxi.session.v1.Session.CreateSessionResponse.newBuilder()
                     .setSessionId(session.getId())
@@ -109,6 +124,14 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
                     saved.messageId(), saved.seq(), saved.content(), session.getSummary(), history);
         }
 
+        // M5-5.1 分析埋点：每条用户消息都发（聚合侧取最早即为「首条用户消息」，
+        // 从而无需在会话域判定「是否首条」）
+        if ("user".equalsIgnoreCase(request.getSender())) {
+            analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
+                    AnalyticsEventPublisher.STAGE_USER_MSG, session.getChannel(),
+                    session.getUserId(), session.getAgentId(), saved.messageId());
+        }
+
         observer.onNext(lingxi.session.v1.Session.SendMessageResponse.newBuilder()
                 .setMessageId(saved.messageId())
                 .setSeq(saved.seq())
@@ -143,6 +166,16 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
             // M4-4.5：成功迁移到 HUMAN_CHAT 时通知 AI 域终止正在生成的回答
             if (target == SessionStateMachine.State.HUMAN_CHAT) {
                 eventPublisher.publishTakeover(session.getId(), "state_change", request.getOperator());
+                // M5-5.1 分析埋点：状态迁至人工视为「转人工」（漏斗 handoff 阶段）
+                analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
+                        AnalyticsEventPublisher.STAGE_HANDOFF, session.getChannel(),
+                        session.getUserId(), session.getAgentId(), "");
+            }
+            // M5-5.1 分析埋点：关闭（漏斗终态）
+            if (target == SessionStateMachine.State.CLOSED) {
+                analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
+                        AnalyticsEventPublisher.STAGE_CLOSED, session.getChannel(),
+                        session.getUserId(), session.getAgentId(), "");
             }
         } catch (IllegalStateTransitionException e) {
             log.warn("非法状态迁移被拒绝 sessionId={} {} -> {}", session.getId(),
@@ -233,7 +266,46 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
         // M4-4.5：接管成功后通知 AI 域终止该会话正在生成的回答
         if (result.ok()) {
             eventPublisher.publishTakeover(session.getId(), "agent_takeover", request.getAgentId());
+            // M5-5.1 分析埋点：坐席接管成功亦属「转人工」（漏斗 handoff 阶段，聚合侧取最早）
+            analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
+                    AnalyticsEventPublisher.STAGE_HANDOFF, session.getChannel(),
+                    session.getUserId(), session.getAgentId(), "");
         }
+    }
+
+    /**
+     * 提交满意度评价（M5-5.1）：**租户/用户由会话解析**（前端只传 session_id 与评分，
+     * 防伪造租户）；校验会话存在与评分范围后发布分析事件，由报表域落库。
+     */
+    @Override
+    public void submitFeedback(lingxi.session.v1.Session.SubmitFeedbackRequest request,
+                               StreamObserver<lingxi.session.v1.Session.SubmitFeedbackResponse> observer) {
+        Session session = repository.findById(request.getSessionId()).orElse(null);
+        if (session == null) {
+            observer.onNext(lingxi.session.v1.Session.SubmitFeedbackResponse.newBuilder()
+                    .setOk(false).setReason("会话不存在").build());
+            observer.onCompleted();
+            return;
+        }
+        int rating = request.getRating();
+        if (rating < 1 || rating > MAX_RATING) {
+            observer.onNext(lingxi.session.v1.Session.SubmitFeedbackResponse.newBuilder()
+                    .setOk(false).setReason("评分必须在 1~" + MAX_RATING + " 之间").build());
+            observer.onCompleted();
+            return;
+        }
+        String comment = truncate(request.getComment(), MAX_COMMENT_LEN);
+        analyticsPublisher.publishFeedback(session.getId(), session.getTenantId(), session.getUserId(),
+                rating, comment, truncate(request.getTags(), MAX_TAGS_LEN));
+        log.info("会话满意度已提交 sessionId={} rating={}", session.getId(), rating);
+        observer.onNext(lingxi.session.v1.Session.SubmitFeedbackResponse.newBuilder().setOk(true).build());
+        observer.onCompleted();
+    }
+
+    /** 按上限截断文本（null 安全），避免超长评价撑爆事件体与存储列。 */
+    private static String truncate(String value, int maxLength) {
+        String text = value == null ? "" : value.trim();
+        return text.length() <= maxLength ? text : text.substring(0, maxLength);
     }
 
     @Override

@@ -162,6 +162,11 @@ class Settings(BaseSettings):
     kafka_max_poll_interval_ms: int = 300_000
     kafka_consumer_restart_backoff_seconds: float = 5.0
 
+    # 分析管道（M5-5.1）：LLM 用量埋点投递到该主题，由 Java 报表域消费落库。
+    # 关闭后 AI 侧不再产出用量埋点（会话生命周期与满意度埋点由 Java 侧产出，不受此开关影响）。
+    analytics_enabled: bool = True
+    kafka_topic_analytics_event: str = "lingxi.analytics.event"
+
     # 知识库入库链路（M3-3.2：Java 上传 → 事件 → 本侧入库 → 状态回写）
     kafka_topic_kb_ingest: str = "kb.doc.ingest"  # 消费：文档入库触发（Java 生产）
     kafka_topic_kb_indexed: str = "kb.doc.indexed"  # 生产：入库结果（Java 消费后回写状态）

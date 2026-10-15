@@ -178,6 +178,42 @@ class TestJudge:
         assert not outcome.passed
         assert outcome.forbidden == ["15天无理由"]
 
+    def test_postfixed_refutation_is_not_violation(self) -> None:
+        """关键词**后置**反驳（「…不成立」）：中文否定可后置，应识别为纠正而非编造。"""
+        cases = [
+            "无理由退款为签收后 7 天内。因此，“15 天无理由退款”不成立。",
+            "“15 天无理由退款”这一说法有误，实际为签收后 7 天内。",
+            "15 天无理由退款的说法不成立，无理由退款仅 7 天内有效。",
+        ]
+        for answer in cases:
+            outcome = judge(
+                _case("c7g", "能15天无理由吗", Expectation(must_contain=["7天"], must_not_contain=["15天无理由"])),
+                answer,
+                [],
+            )
+            assert outcome.passed, f"误判为编造: {answer}"
+            assert outcome.forbidden == []
+
+    def test_postfixed_window_does_not_excuse_genuine_hallucination(self) -> None:
+        """后置窗口不得放过真实编造：断言句中的「不是」（前置型标记）不构成豁免。"""
+        outcome = judge(
+            _case("c7h", "能15天无理由吗", Expectation(must_not_contain=["15天无理由"])),
+            "可以的，15 天无理由是标准做法，不是 7 天。",
+            [],
+        )
+        assert not outcome.passed
+        assert outcome.forbidden == ["15天无理由"]
+
+    def test_refutation_in_next_sentence_does_not_excuse(self) -> None:
+        """后置反驳必须同句：下一句的否定不得豁免本句的编造。"""
+        outcome = judge(
+            _case("c7i", "能15天无理由吗", Expectation(must_not_contain=["15天无理由"])),
+            "本店支持 15 天无理由退款。顺带一提，7 天无理由并不适用本商品。",
+            [],
+        )
+        assert not outcome.passed
+        assert outcome.forbidden == ["15天无理由"]
+
     def test_heading_hit_is_metric_only(self) -> None:
         """期望标题只作为检索指标，不影响通过判定（避免精排波动导致回归不稳定）。"""
         outcome = judge(

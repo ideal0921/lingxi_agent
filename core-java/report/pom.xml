@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.lingxi</groupId>
+        <artifactId>lingxi-core</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>lingxi-report</artifactId>
+    <name>lingxi-report</name>
+    <description>报表域：分析埋点落库与会话漏斗/Token 消耗/满意度查询（M5-5.1）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- gRPC 契约（ReportService 由本域实现，网关经 gRPC 调用） -->
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-gateway-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- 分析存储：本期落 MySQL（JdbcTemplate），经仓储端口可替换为 ClickHouse -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

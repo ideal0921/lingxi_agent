@@ -42,12 +42,19 @@ func main() {
 	}
 	defer func() { _ = workflowClient.Close() }()
 
+	// 报表域 gRPC 客户端（Java 业务域，共用地址；M5-5.1 运营报表与满意度）。
+	reportClient, err := client.NewReportService(cfg.SessionServiceAddr)
+	if err != nil {
+		log.Fatalf("连接报表域失败: %v", err)
+	}
+	defer func() { _ = reportClient.Close() }()
+
 	router := gin.New()
 	router.Use(gin.Recovery(), middleware.AccessLog())
 
 	// 长连接：WSS 会话通道（不套限流，由心跳/缓冲控流）。
 	hub := ws.NewHub()
-	wsHandler := ws.NewHandler(hub, sessionClient)
+	wsHandler := ws.NewHandler(hub, sessionClient, cfg.DefaultTenant)
 	router.GET("/ws", wsHandler.ServeWS)
 
 	// AI 流式片段消费（M3-3.8）：消费 Kafka chunk 事件并广播至会话连接。
@@ -98,6 +105,13 @@ func main() {
 	api.GET("/studio/workflows/:workflow_id/versions/:version", studioHandler.GetVersion)
 	api.POST("/studio/workflows/:workflow_id/versions/:version/rollback", studioHandler.RollbackVersion)
 	api.DELETE("/studio/workflows/:workflow_id", studioHandler.DeleteWorkflow)
+
+	// 运营报表与满意度接口（M5-5.1）：漏斗 / Token 消耗 / CSAT 查询 + 用户端评价提交。
+	reportHandler := handler.NewReportHandler(reportClient, sessionClient)
+	api.GET("/reports/funnel", reportHandler.GetFunnel)
+	api.GET("/reports/tokens", reportHandler.GetTokens)
+	api.GET("/reports/csat", reportHandler.GetCsat)
+	api.POST("/session/:session_id/feedback", reportHandler.SubmitFeedback)
 
 	srv := &http.Server{
 		Addr:              cfg.Port,

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lingxi.session.event.AnalyticsEventPublisher;
 import com.lingxi.session.model.Session;
 import com.lingxi.session.model.SessionMessage;
 import com.lingxi.session.repo.SessionRepository;
@@ -19,7 +20,8 @@ import com.lingxi.session.repo.SessionRepository;
  * 消息 ID 沿用上游生成的 {@code ai-<uuid>}，前端据此与流式内容归并为同一条，
  * 避免打字机内容与落库消息重复渲染。</p>
  *
- * <p>幂等：重复投递同一 {@code message_id} 时跳过落库（Kafka 至少一次语义兜底）。</p>
+ * <p>幂等：重复投递同一 {@code message_id} 时跳过落库（Kafka 至少一次语义兜底）；
+ * M5-5.1：**仅首次落库**时发布 {@code ai_replied} 分析埋点（避免重投导致漏斗虚高）。</p>
  */
 @Component
 @ConditionalOnProperty(name = "lingxi.kafka.enabled", havingValue = "true")
@@ -29,10 +31,14 @@ public class AiReplyConsumer {
 
     private final SessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
+    /** 分析埋点发布端口（M5-5.1）。 */
+    private final AnalyticsEventPublisher analyticsPublisher;
 
-    public AiReplyConsumer(SessionRepository sessionRepository, ObjectMapper objectMapper) {
+    public AiReplyConsumer(SessionRepository sessionRepository, ObjectMapper objectMapper,
+                           AnalyticsEventPublisher analyticsPublisher) {
         this.sessionRepository = sessionRepository;
         this.objectMapper = objectMapper;
+        this.analyticsPublisher = analyticsPublisher;
     }
 
     @KafkaListener(
@@ -56,13 +62,18 @@ public class AiReplyConsumer {
         }
     }
 
-    /** 落库助手消息（含幂等校验）。 */
-    private void persist(Session session, String sessionId, String messageId, String content) {
+    /** 落库助手消息（含幂等校验）；返回是否**首次**落库（供埋点判定，防重投虚高）。 */
+    private boolean persist(Session session, String sessionId, String messageId, String content) {
         if (session.hasMessageId(messageId)) {
             log.debug("AI 回答已落库，跳过重复事件 sessionId={} messageId={}", sessionId, messageId);
-            return;
+            return false;
         }
         SessionMessage saved = session.appendMessage("agent", "ai", content, messageId);
         log.info("AI 回答已落库 sessionId={} messageId={} seq={}", sessionId, messageId, saved.seq());
+        // M5-5.1 分析埋点：AI 应答（漏斗阶段，聚合侧取最早 = 首次应答）
+        analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
+                AnalyticsEventPublisher.STAGE_AI_REPLIED, session.getChannel(),
+                session.getUserId(), session.getAgentId(), messageId);
+        return true;
     }
 }

@@ -11,9 +11,11 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import aclosing
 
+from app.analytics import flush_llm_usage, mark_first_token
 from app.config import Settings, settings
 from app.gateway.providers import (
     DeepSeekProvider,
@@ -66,6 +68,7 @@ class LLMGateway:
         return self._backoff_base * (2 ** (attempt - 1))
 
     async def generate(self, prompt: str, model: str | None = None) -> str:
+        started = time.perf_counter()
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             if attempt > 0:
@@ -73,7 +76,11 @@ class LLMGateway:
                 await asyncio.sleep(self._backoff_delay(attempt))
             for provider in self._providers:
                 try:
-                    return await provider.chat(prompt, model=model, timeout=self._timeout)
+                    answer = await provider.chat(prompt, model=model, timeout=self._timeout)
+                    # M5-5.1：Token 用量进分析管道（后台发布，不阻塞调用方）
+                    flush_llm_usage(completion_chars=len(answer),
+                                    latency_ms=_elapsed_ms(started))
+                    return answer
                 except Exception as exc:  # noqa: BLE001 - 任一 provider 失败都需降级
                     last_error = exc
                     logger.warning(
@@ -86,43 +93,54 @@ class LLMGateway:
 
         首字超时保护：等待**首个片段**时施加 ``first_token_timeout``，超时视为该
         Provider 失败并切换下一个；已产出片段后超时不再降级（避免半截重复）。
+
+        M5-5.1：无论正常结束、降级中止还是异常，收尾都会如实记录本轮 LLM 用量
+        （真实 usage 优先，取不到则按字符数估算并标记），后台发布、不阻塞流式输出。
         """
-        last_error: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            if attempt > 0:
-                await asyncio.sleep(self._backoff_delay(attempt))
-            for provider in self._providers:
-                emitted = False
-                try:
-                    async with aclosing(
-                        provider.stream_chat(
-                            prompt,
-                            model=model,
-                            timeout=self._timeout,
-                            first_token_timeout=self._first_token_timeout,
-                        )
-                    ) as stream:
-                        while True:
-                            try:
-                                if emitted:
-                                    delta = await anext(stream)
-                                else:
-                                    async with asyncio.timeout(self._first_token_timeout):
+        started = time.perf_counter()
+        produced_chars = 0
+        try:
+            last_error: Exception | None = None
+            for attempt in range(self._max_retries + 1):
+                if attempt > 0:
+                    await asyncio.sleep(self._backoff_delay(attempt))
+                for provider in self._providers:
+                    emitted = False
+                    try:
+                        async with aclosing(
+                            provider.stream_chat(
+                                prompt,
+                                model=model,
+                                timeout=self._timeout,
+                                first_token_timeout=self._first_token_timeout,
+                            )
+                        ) as stream:
+                            while True:
+                                try:
+                                    if emitted:
                                         delta = await anext(stream)
-                            except StopAsyncIteration:
-                                return
-                            emitted = True
-                            yield delta
-                except Exception as exc:  # noqa: BLE001 - 宏观降级判定
-                    last_error = exc
-                    logger.warning(
-                        "LLM 流式 provider=%s 失败(第%d次): %s", provider.name, attempt + 1, exc
-                    )
-                    if emitted:
-                        # 已产出片段，无法安全降级（会重复半截内容），结束本轮流
-                        logger.error("流式中断于 provider=%s，已产出内容不回滚", provider.name)
-                        return
-        raise RuntimeError(f"全部模型流式调用失败: {last_error}") from last_error
+                                    else:
+                                        async with asyncio.timeout(self._first_token_timeout):
+                                            delta = await anext(stream)
+                                except StopAsyncIteration:
+                                    return
+                                emitted = True
+                                if produced_chars == 0:
+                                    mark_first_token()  # M5-5.1：本轮首字延迟
+                                produced_chars += len(delta)
+                                yield delta
+                    except Exception as exc:  # noqa: BLE001 - 宏观降级判定
+                        last_error = exc
+                        logger.warning(
+                            "LLM 流式 provider=%s 失败(第%d次): %s", provider.name, attempt + 1, exc
+                        )
+                        if emitted:
+                            # 已产出片段，无法安全降级（会重复半截内容），结束本轮流
+                            logger.error("流式中断于 provider=%s，已产出内容不回滚", provider.name)
+                            return
+            raise RuntimeError(f"全部模型流式调用失败: {last_error}") from last_error
+        finally:
+            flush_llm_usage(completion_chars=produced_chars, latency_ms=_elapsed_ms(started))
 
     async def stream_events(
         self,
@@ -135,40 +153,57 @@ class LLMGateway:
         降级策略与 :meth:`stream` 一致：等待**首个有效事件**（非空 delta 或 tool_call）
         时施加 ``first_token_timeout``，超时视为该 Provider 失败并切换下一个；
         一旦已产出任何 delta/tool_call 便不再降级，避免半截内容重复。
+
+        M5-5.1：每次调用（工具多轮各算一次）收尾都记录 LLM 用量；真实 usage 取不到时
+        按已产出文本的字符数估算并标记，后台发布、不阻塞流式输出。
         """
-        last_error: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            if attempt > 0:
-                await asyncio.sleep(self._backoff_delay(attempt))
-            for provider in self._providers:
-                emitted = False
-                try:
-                    async with aclosing(
-                        provider.stream_events(messages, tools=tools, model=model)
-                    ) as stream:
-                        while True:
-                            try:
-                                if emitted:
-                                    event = await anext(stream)
-                                else:
-                                    async with asyncio.timeout(self._first_token_timeout):
+        started = time.perf_counter()
+        produced_chars = 0
+        try:
+            last_error: Exception | None = None
+            for attempt in range(self._max_retries + 1):
+                if attempt > 0:
+                    await asyncio.sleep(self._backoff_delay(attempt))
+                for provider in self._providers:
+                    emitted = False
+                    try:
+                        async with aclosing(
+                            provider.stream_events(messages, tools=tools, model=model)
+                        ) as stream:
+                            while True:
+                                try:
+                                    if emitted:
                                         event = await anext(stream)
-                            except StopAsyncIteration:
-                                return
-                            # 空事件为终止信号，不视为有效产出（不阻断后续正常结束）
-                            if event.delta or event.tool_call is not None:
-                                emitted = True
-                            yield event
-                except Exception as exc:  # noqa: BLE001 - 宏观降级判定
-                    last_error = exc
-                    logger.warning(
-                        "LLM 流式事件 provider=%s 失败(第%d次): %s", provider.name, attempt + 1, exc
-                    )
-                    if emitted:
-                        # 已产出事件，无法安全降级（会重复半截内容），结束本轮流
-                        logger.error("流式事件中断于 provider=%s，已产出内容不回滚", provider.name)
-                        return
-        raise RuntimeError(f"全部模型流式调用失败: {last_error}") from last_error
+                                    else:
+                                        async with asyncio.timeout(self._first_token_timeout):
+                                            event = await anext(stream)
+                                except StopAsyncIteration:
+                                    return
+                                # 空事件为终止信号，不视为有效产出（不阻断后续正常结束）
+                                if event.delta or event.tool_call is not None:
+                                    emitted = True
+                                if event.delta:
+                                    if produced_chars == 0:
+                                        mark_first_token()  # M5-5.1：本轮首字延迟
+                                    produced_chars += len(event.delta)
+                                yield event
+                    except Exception as exc:  # noqa: BLE001 - 宏观降级判定
+                        last_error = exc
+                        logger.warning(
+                            "LLM 流式事件 provider=%s 失败(第%d次): %s", provider.name, attempt + 1, exc
+                        )
+                        if emitted:
+                            # 已产出事件，无法安全降级（会重复半截内容），结束本轮流
+                            logger.error("流式事件中断于 provider=%s，已产出内容不回滚", provider.name)
+                            return
+            raise RuntimeError(f"全部模型流式调用失败: {last_error}") from last_error
+        finally:
+            flush_llm_usage(completion_chars=produced_chars, latency_ms=_elapsed_ms(started))
+
+
+def _elapsed_ms(started: float) -> int:
+    """从 perf_counter 起点到当前的毫秒差（用于埋点耗时）。"""
+    return int((time.perf_counter() - started) * 1000)
 
 
 def create_gateway(config: Settings = settings) -> LLMGateway:

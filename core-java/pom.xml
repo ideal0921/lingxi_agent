@@ -26,6 +26,7 @@
         <module>knowledge</module>
         <module>business</module>
         <module>workflow</module>
+        <module>report</module>
         <module>start</module>
     </modules>
 

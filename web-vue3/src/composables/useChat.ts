@@ -1,5 +1,11 @@
 import { ref, onUnmounted } from 'vue'
-import { WssClient, createSession, type ChatMessage, type WsStatus } from '../api/wss'
+import {
+  WssClient,
+  createSession,
+  submitFeedback,
+  type ChatMessage,
+  type WsStatus,
+} from '../api/wss'
 
 const SESSION_KEY = 'lingxi_portal_session'
 
@@ -13,6 +19,10 @@ export function useChat() {
   const messages = ref<ChatMessage[]>([])
   const status = ref<WsStatus>('disconnected')
   const error = ref('')
+  // 满意度评价（M5-5.1）：提交成功置为已评价态，失败仅提示（不影响会话）
+  const rating = ref(0)
+  const feedbackSubmitted = ref(false)
+  const feedbackError = ref('')
 
   let client: WssClient | null = null
   let currentUserId = ''
@@ -138,7 +148,41 @@ export function useChat() {
     connect()
   }
 
+  /**
+   * 提交满意度评价（M5-5.1）：评分 1~5，意见可选。
+   * 业务拒绝（ok=false，如会话不存在）与通道异常都只提示，不中断会话。
+   */
+  async function submitRating(comment = ''): Promise<void> {
+    if (feedbackSubmitted.value || rating.value <= 0) return
+    if (!sessionId) {
+      feedbackError.value = '会话未就绪，暂无法评价'
+      return
+    }
+    try {
+      const resp = await submitFeedback(sessionId, rating.value, comment)
+      if (!resp.ok) {
+        feedbackError.value = resp.reason || '提交失败，请稍后重试'
+        return
+      }
+      feedbackSubmitted.value = true
+      feedbackError.value = ''
+    } catch {
+      feedbackError.value = '提交失败，请稍后重试'
+    }
+  }
+
   onUnmounted(() => client?.disconnect())
 
-  return { messages, status, error, init, send, reconnect }
+  return {
+    messages,
+    status,
+    error,
+    rating,
+    feedbackSubmitted,
+    feedbackError,
+    init,
+    send,
+    reconnect,
+    submitRating,
+  }
 }

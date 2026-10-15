@@ -18,13 +18,13 @@ var errForTest = errors.New("测试错误")
 
 // mockSessionClient 会话域 gRPC 客户端测试替身。
 type mockSessionClient struct {
-	createFn func(userID, channel string) (string, error)
+	createFn func(userID, channel, tenantID string) (string, error)
 	sendFn   func(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error)
 	pullFn   func(sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error)
 }
 
-func (m *mockSessionClient) CreateSession(userID, channel string) (string, error) {
-	return m.createFn(userID, channel)
+func (m *mockSessionClient) CreateSession(userID, channel, tenantID string) (string, error) {
+	return m.createFn(userID, channel, tenantID)
 }
 
 func (m *mockSessionClient) SendMessage(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error) {
@@ -312,12 +312,15 @@ func TestHandleResume(t *testing.T) {
 func TestCreateSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	hub := NewHub()
+	// 记录建会话时实际注入的租户，验证「请求体缺 tenant_id 时回落默认租户」
+	var seenTenant string
 	mock := &mockSessionClient{
-		createFn: func(userID, channel string) (string, error) {
+		createFn: func(userID, channel, tenantID string) (string, error) {
+			seenTenant = tenantID
 			return "session-" + userID, nil
 		},
 	}
-	h := NewHandler(hub, mock)
+	h := NewHandler(hub, mock, "lingxi")
 
 	router := gin.New()
 	router.POST("/api/v1/session", h.CreateSession)
@@ -338,6 +341,24 @@ func TestCreateSession(t *testing.T) {
 		}
 		if resp["session_id"] != "session-u1" {
 			t.Fatalf("session_id 不符: %+v", resp)
+		}
+		if seenTenant != "lingxi" {
+			t.Fatalf("缺 tenant_id 时应回落默认租户，实际 %q", seenTenant)
+		}
+	})
+
+	t.Run("显式租户透传", func(t *testing.T) {
+		body := strings.NewReader(`{"user_id":"u2","tenant_id":"tenant-x"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/session", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("应返回 200，实际 %d: %s", w.Code, w.Body.String())
+		}
+		if seenTenant != "tenant-x" {
+			t.Fatalf("显式 tenant_id 应原样透传，实际 %q", seenTenant)
 		}
 	})
 
@@ -362,7 +383,7 @@ func TestPushAgentReply(t *testing.T) {
 			return &sessionv1.SendMessageResponse{Seq: 7, MessageId: "m7"}, nil
 		},
 	}
-	h := NewHandler(hub, mock)
+	h := NewHandler(hub, mock, "lingxi")
 
 	router := gin.New()
 	router.POST("/api/v1/agent/reply", h.PushAgentReply)

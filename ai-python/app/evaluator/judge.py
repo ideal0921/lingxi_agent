@@ -65,8 +65,30 @@ _NEGATION_MARKERS: tuple[str, ...] = (
     "不详",
 )
 
+# 后置反驳标记：关键词出现在这些小段**之后**时，同样属「纠正/澄清」。
+# 中文否定既可前置（「不是 15 天无理由」）也可后置（「“15 天无理由退款”不成立」），
+# 只回看前缀会漏掉后者，导致「正确纠正了用户错误前提」的回答被误判为编造。
+# 这里刻意只收「反驳谓语」的强标记（不收「不是/并非」等前置型），避免把
+# 「15 天无理由是标准做法，不是 7 天」这类真实编造放过。
+_REFUTATION_MARKERS: tuple[str, ...] = (
+    "不成立",
+    "不对",
+    "不正确",
+    "不实",
+    "有误",
+    "是错的",
+    "错误",
+    "不适用",
+    "不符合",
+    "不支持",
+    "不提供",
+    "不属于",
+)
+
 # 句内回看窗口上限（归一化后字符数）：从所在句子的开头回看，避免跨句误判
 _NEGATION_WINDOW_MAX = 40
+# 句内前瞻窗口上限（归一化后字符数）：只覆盖关键词后紧邻的一小段，避免后续无关语句的否定被误用
+_REFUTATION_WINDOW_MAX = 12
 # 句子分隔符（用于把回看范围限制在关键词所在句内）
 _SENTENCE_DELIMITERS = "。！？；\n.!?;"
 
@@ -99,8 +121,24 @@ def _negated_context(normalized: str, index: int) -> bool:
     return any(marker in window for marker in _NEGATION_MARKERS)
 
 
+def _refuted_context(normalized: str, keyword_end: int) -> bool:
+    """关键词**之后**是否为反驳/纠正语境（与 :func:`_negated_context` 互补）。
+
+    前瞻范围同样限制在**关键词所在句内**，且只覆盖紧邻的一小段（``_REFUTATION_WINDOW_MAX``）：
+    既识别「“15 天无理由退款”不成立」「该说法有误」这类后置纠正，
+    又不会把后续无关语句里的否定（如「支持 15 天无理由。7 天不适用」的第二句）误当作豁免。
+    """
+    limit = min(keyword_end + _REFUTATION_WINDOW_MAX, len(normalized))
+    for position in range(keyword_end, limit):
+        if normalized[position] in _SENTENCE_DELIMITERS:
+            limit = position
+            break
+    window = normalized[keyword_end:limit]
+    return any(marker in window for marker in _REFUTATION_MARKERS)
+
+
 def _find_forbidden(answer_normalized: str, keywords: list[str]) -> list[str]:
-    """查找违反幻觉守卫的关键词；否定语境（纠正/澄清）不计入违反。"""
+    """查找违反幻觉守卫的关键词；前置否定或后置反驳语境（纠正/澄清）不计入违反。"""
     violations: list[str] = []
     for keyword in keywords:
         target = normalize(keyword)
@@ -108,7 +146,10 @@ def _find_forbidden(answer_normalized: str, keywords: list[str]) -> list[str]:
             continue
         index = answer_normalized.find(target)
         while index != -1:
-            if not _negated_context(answer_normalized, index):
+            # 前置否定（「不是 15 天无理由」）与后置反驳（「…不成立」）都视为澄清而非编造
+            if not _negated_context(answer_normalized, index) and not _refuted_context(
+                answer_normalized, index + len(target)
+            ):
                 violations.append(keyword)
                 break
             index = answer_normalized.find(target, index + 1)

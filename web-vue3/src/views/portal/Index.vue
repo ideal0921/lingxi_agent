@@ -57,19 +57,69 @@
         </n-button>
         <n-button v-if="!connected" size="small" @click="reconnect">重连</n-button>
       </n-space>
+
+      <!-- 满意度评价（M5-5.1）：提交后置为已评价态，失败仅提示不影响会话 -->
+      <n-divider style="margin: 4px 0" />
+      <n-space vertical :size="8">
+        <n-space align="center" :size="8">
+          <span class="feedback-title">本次服务满意吗？</span>
+          <n-rate v-model:value="rating" :count="5" :disabled="feedbackSubmitted" />
+        </n-space>
+        <template v-if="rating > 0 && !feedbackSubmitted">
+          <n-input
+            v-model:value="feedbackComment"
+            type="textarea"
+            :rows="2"
+            maxlength="500"
+            show-count
+            placeholder="补充意见（可选）"
+          />
+          <n-button type="primary" size="small" @click="submitRating(feedbackComment)">
+            提交评价
+          </n-button>
+        </template>
+        <n-alert v-if="feedbackError" type="warning" :show-icon="false" size="small">
+          {{ feedbackError }}
+        </n-alert>
+        <n-alert v-if="feedbackSubmitted" type="success" :show-icon="false" size="small">
+          感谢您的评价！
+        </n-alert>
+      </n-space>
     </n-space>
   </n-card>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
-import { NCard, NSpace, NInput, NButton, NTag, NAlert, NEmpty } from 'naive-ui'
+import {
+  NCard,
+  NSpace,
+  NInput,
+  NButton,
+  NTag,
+  NAlert,
+  NEmpty,
+  NDivider,
+  NRate,
+} from 'naive-ui'
 import { useChat } from '../../composables/useChat'
 import type { WsStatus } from '../../api/wss'
 
-const { messages, status, error, init, send, reconnect } = useChat()
+const {
+  messages,
+  status,
+  error,
+  rating,
+  feedbackSubmitted,
+  feedbackError,
+  init,
+  send,
+  reconnect,
+  submitRating,
+} = useChat()
 
 const draft = ref('')
+const feedbackComment = ref('')
 const listEl = ref<HTMLElement | null>(null)
 
 // 用户标识：本地持久化，联调环境固定 demo 用户。
@@ -178,6 +228,12 @@ function scrollToBottom(): void {
   margin-top: 2px;
   font-size: 12px;
   color: #999;
+}
+
+/* 评价区标题（M5-5.1） */
+.feedback-title {
+  font-size: 13px;
+  color: #666;
 }
 
 /* 人工接管中断提示：与消息同宽上限，复用 naive-ui 警告样式 */

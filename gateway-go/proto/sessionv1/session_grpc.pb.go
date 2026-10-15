@@ -30,6 +30,7 @@ const (
 	SessionService_TakeOver_FullMethodName            = "/lingxi.session.v1.SessionService/TakeOver"
 	SessionService_ListAgentSessions_FullMethodName   = "/lingxi.session.v1.SessionService/ListAgentSessions"
 	SessionService_SuggestReplies_FullMethodName      = "/lingxi.session.v1.SessionService/SuggestReplies"
+	SessionService_SubmitFeedback_FullMethodName      = "/lingxi.session.v1.SessionService/SubmitFeedback"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -46,6 +47,7 @@ type SessionServiceClient interface {
 	TakeOver(ctx context.Context, in *TakeOverRequest, opts ...grpc.CallOption) (*TakeOverResponse, error)
 	ListAgentSessions(ctx context.Context, in *ListAgentSessionsRequest, opts ...grpc.CallOption) (*ListAgentSessionsResponse, error)
 	SuggestReplies(ctx context.Context, in *SuggestRepliesRequest, opts ...grpc.CallOption) (*SuggestRepliesResponse, error)
+	SubmitFeedback(ctx context.Context, in *SubmitFeedbackRequest, opts ...grpc.CallOption) (*SubmitFeedbackResponse, error)
 }
 
 type sessionServiceClient struct {
@@ -136,6 +138,16 @@ func (c *sessionServiceClient) SuggestReplies(ctx context.Context, in *SuggestRe
 	return out, nil
 }
 
+func (c *sessionServiceClient) SubmitFeedback(ctx context.Context, in *SubmitFeedbackRequest, opts ...grpc.CallOption) (*SubmitFeedbackResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitFeedbackResponse)
+	err := c.cc.Invoke(ctx, SessionService_SubmitFeedback_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SessionServiceServer is the server API for SessionService service.
 // All implementations must embed UnimplementedSessionServiceServer
 // for forward compatibility.
@@ -150,6 +162,7 @@ type SessionServiceServer interface {
 	TakeOver(context.Context, *TakeOverRequest) (*TakeOverResponse, error)
 	ListAgentSessions(context.Context, *ListAgentSessionsRequest) (*ListAgentSessionsResponse, error)
 	SuggestReplies(context.Context, *SuggestRepliesRequest) (*SuggestRepliesResponse, error)
+	SubmitFeedback(context.Context, *SubmitFeedbackRequest) (*SubmitFeedbackResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
 }
 
@@ -183,6 +196,9 @@ func (UnimplementedSessionServiceServer) ListAgentSessions(context.Context, *Lis
 }
 func (UnimplementedSessionServiceServer) SuggestReplies(context.Context, *SuggestRepliesRequest) (*SuggestRepliesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuggestReplies not implemented")
+}
+func (UnimplementedSessionServiceServer) SubmitFeedback(context.Context, *SubmitFeedbackRequest) (*SubmitFeedbackResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitFeedback not implemented")
 }
 func (UnimplementedSessionServiceServer) mustEmbedUnimplementedSessionServiceServer() {}
 func (UnimplementedSessionServiceServer) testEmbeddedByValue()                        {}
@@ -349,6 +365,24 @@ func _SessionService_SuggestReplies_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_SubmitFeedback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitFeedbackRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).SubmitFeedback(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_SubmitFeedback_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).SubmitFeedback(ctx, req.(*SubmitFeedbackRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SessionService_ServiceDesc is the grpc.ServiceDesc for SessionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -387,6 +421,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SuggestReplies",
 			Handler:    _SessionService_SuggestReplies_Handler,
+		},
+		{
+			MethodName: "SubmitFeedback",
+			Handler:    _SessionService_SubmitFeedback_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

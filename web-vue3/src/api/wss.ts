@@ -65,6 +65,29 @@ export async function createSession(userId: string): Promise<string> {
   return resp.session_id
 }
 
+/** 评价提交结果：ok=false 时 reason 为拒绝原因（会话不存在/评分越界等）。 */
+export interface FeedbackResult {
+  ok: boolean
+  reason: string
+}
+
+/**
+ * 提交会话满意度评价（M5-5.1，走 HTTP 而非 WS）。
+ * 租户/用户由服务端按会话 ID 解析，故前端不传 tenant_id（防跨租户伪造）。
+ */
+export async function submitFeedback(
+  sessionId: string,
+  rating: number,
+  comment = '',
+  tags = '',
+): Promise<FeedbackResult> {
+  return (await http.post(`/session/${sessionId}/feedback`, {
+    rating,
+    comment,
+    tags,
+  })) as FeedbackResult
+}
+
 /**
  * 会话长连接客户端：
  * - 心跳保活由浏览器与服务端 ping/pong 帧自动完成；

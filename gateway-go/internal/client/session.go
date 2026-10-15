@@ -30,12 +30,13 @@ func NewSessionService(addr string) (*SessionService, error) {
 	}, nil
 }
 
-// CreateSession 建会话。
-func (s *SessionService) CreateSession(userID, channel string) (string, error) {
+// CreateSession 建会话。tenantID 由接入层注入（网关默认租户或鉴权中间件解析结果），
+// Java 会话域据此为会话打上租户，后续消息/埋点事件均继承该租户。
+func (s *SessionService) CreateSession(userID, channel, tenantID string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := s.client.CreateSession(ctx, &sessionv1.CreateSessionRequest{
-		UserId: userID, Channel: channel,
+		UserId: userID, Channel: channel, TenantId: tenantID,
 	})
 	if err != nil {
 		return "", err
@@ -100,6 +101,17 @@ func (s *SessionService) ListAgentSessions(agentID string) ([]*sessionv1.Session
 		return nil, err
 	}
 	return resp.Sessions, nil
+}
+
+// SubmitFeedback 提交会话满意度评价（M5-5.1）。
+// 租户/用户由 Java 会话域按会话解析，故前端不得传 tenant_id（防跨租户伪造）。
+// 评分越界或会话不存在时以 ok=false + reason 返回（业务拒绝，非通道故障）。
+func (s *SessionService) SubmitFeedback(sessionID string, rating int32, comment, tags string) (*sessionv1.SubmitFeedbackResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.client.SubmitFeedback(ctx, &sessionv1.SubmitFeedbackRequest{
+		SessionId: sessionID, Rating: rating, Comment: comment, Tags: tags,
+	})
 }
 
 // Close 关闭连接。

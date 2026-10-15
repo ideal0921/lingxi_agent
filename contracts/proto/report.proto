@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+// 报表域契约（M5-5.1）：会话漏斗 / Token 消耗 / 满意度三类运营报表查询。
+// 由 Java 报表域实现（本期落 MySQL，仓储经依赖倒置端口可替换为 ClickHouse），
+// Go 网关经 gRPC 转发报表页面调用。
+package lingxi.report.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto/reportv1";
+
+// 时间范围（epoch ms，左闭右开；缺省由服务端取最近 7 天）
+message ReportRange {
+  string tenant_id = 1;    // 租户标识（**强制过滤**，跨租户不合算）
+  int64 from_ms = 2;       // 起始时间
+  int64 to_ms = 3;         // 结束时间
+}
+
+// ---------- 会话漏斗 ----------
+
+// 漏斗阶段：一会话一行，各阶段为「最早时间戳」（0 表示未到达该阶段）
+message FunnelStageCount {
+  string stage = 1;         // created / user_msg / ai_replied / handoff / closed
+  string label = 2;         // 展示名（中文）
+  int32 sessions = 3;       // 到达该阶段的会话数
+  double step_rate = 4;     // 相对上一阶段的转化率（首个阶段为 1.0）
+  double total_rate = 5;    // 相对「建会话」的累计转化率
+}
+
+message FunnelReport {
+  int32 created_sessions = 1;         // 区间内建会话总数（分母基数）
+  repeated FunnelStageCount stages = 2;
+}
+
+// ---------- Token 消耗 ----------
+
+// 日 × 租户 × 提供方 × 模型 聚合行
+message TokenUsageRow {
+  string stat_date = 1;        // 统计日（yyyy-MM-dd，Asia/Shanghai）
+  string provider = 2;         // 模型提供方
+  string model = 3;            // 模型名
+  int32 requests = 4;          // LLM 调用次数
+  int64 prompt_tokens = 5;     // 输入 token 合计
+  int64 completion_tokens = 6; // 输出 token 合计
+  int32 estimated_requests = 7;// 其中无法取得真实 usage 的估算条数
+  int64 first_token_ms_avg = 8;// 平均首字延迟（ms）
+}
+
+message TokenReport {
+  int64 total_prompt_tokens = 1;
+  int64 total_completion_tokens = 2;
+  int32 total_requests = 3;
+  repeated TokenUsageRow rows = 4;
+}
+
+// ---------- 满意度（CSAT）----------
+
+// 评分分布（1~5 星）
+message RatingBucket {
+  int32 rating = 1;
+  int32 count = 2;
+}
+
+// 评价明细（最近若干条）
+message FeedbackItem {
+  string session_id = 1;
+  int32 rating = 2;
+  string comment = 3;
+  int64 created_at_ms = 4;
+}
+
+message CsatReport {
+  int32 feedback_count = 1;      // 评价总数
+  double average_rating = 2;     // 平均分
+  double csat = 3;               // CSAT = 评分 ≥4 的评价数 / 评价总数
+  repeated RatingBucket distribution = 4;
+  repeated FeedbackItem recent = 5;
+}
+
+// 报表域服务：由 Java 实现，Go 网关通过 gRPC 调用
+service ReportService {
+  rpc GetFunnelReport(ReportRange) returns (FunnelReport);
+  rpc GetTokenReport(ReportRange) returns (TokenReport);
+  rpc GetCsatReport(ReportRange) returns (CsatReport);
+}

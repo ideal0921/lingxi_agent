@@ -75,6 +75,11 @@ class SessionServiceStub:
                 request_serializer=session__pb2.SuggestRepliesRequest.SerializeToString,
                 response_deserializer=session__pb2.SuggestRepliesResponse.FromString,
                 _registered_method=True)
+        self.SubmitFeedback = channel.unary_unary(
+                '/lingxi.session.v1.SessionService/SubmitFeedback',
+                request_serializer=session__pb2.SubmitFeedbackRequest.SerializeToString,
+                response_deserializer=session__pb2.SubmitFeedbackResponse.FromString,
+                _registered_method=True)
 
 
 class SessionServiceServicer:
@@ -129,6 +134,12 @@ class SessionServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SubmitFeedback(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SessionServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -171,6 +182,11 @@ def add_SessionServiceServicer_to_server(servicer, server):
                     servicer.SuggestReplies,
                     request_deserializer=session__pb2.SuggestRepliesRequest.FromString,
                     response_serializer=session__pb2.SuggestRepliesResponse.SerializeToString,
+            ),
+            'SubmitFeedback': grpc.unary_unary_rpc_method_handler(
+                    servicer.SubmitFeedback,
+                    request_deserializer=session__pb2.SubmitFeedbackRequest.FromString,
+                    response_serializer=session__pb2.SubmitFeedbackResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -390,6 +406,33 @@ class SessionService:
             '/lingxi.session.v1.SessionService/SuggestReplies',
             session__pb2.SuggestRepliesRequest.SerializeToString,
             session__pb2.SuggestRepliesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SubmitFeedback(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/lingxi.session.v1.SessionService/SubmitFeedback',
+            session__pb2.SubmitFeedbackRequest.SerializeToString,
+            session__pb2.SubmitFeedbackResponse.FromString,
             options,
             channel_credentials,
             insecure,

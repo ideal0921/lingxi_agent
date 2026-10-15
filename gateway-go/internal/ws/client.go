@@ -30,7 +30,7 @@ const (
 
 // SessionClient 会话域 gRPC 调用接口（由 handler 注入，便于单测替换）。
 type SessionClient interface {
-	CreateSession(userID, channel string) (sessionID string, err error)
+	CreateSession(userID, channel, tenantID string) (sessionID string, err error)
 	SendMessage(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error)
 	PullMessages(sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error)
 }

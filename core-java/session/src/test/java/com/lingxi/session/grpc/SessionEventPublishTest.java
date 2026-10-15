@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import com.lingxi.session.ai.NoOpSuggestRepliesPort;
 import com.lingxi.session.ai.NoOpSuggestRequestPublisher;
 import com.lingxi.session.ai.SuggestReplyCoordinator;
+import com.lingxi.session.event.AnalyticsEventPublisher;
 import com.lingxi.session.event.SessionEventPublisher;
 import com.lingxi.session.model.Session;
 import com.lingxi.session.model.SessionMessage;
@@ -82,6 +83,7 @@ class SessionEventPublishTest {
     }
 
     private RecordingPublisher publisher;
+    private RecordingAnalyticsPublisher analytics;
     private SessionRepository repository;
     private SessionServiceGrpcImpl service;
     private String sessionId;
@@ -89,11 +91,14 @@ class SessionEventPublishTest {
     @BeforeEach
     void setUp() {
         publisher = new RecordingPublisher();
+        analytics = new RecordingAnalyticsPublisher();
         repository = new InMemorySessionRepository();
         // M4-4.6：快捷回复走离线空实现（本用例不校验快捷回复链路）
+        // M5-5.1：分析埋点用记录型空实现（便于断言生命周期事件）
         service = new SessionServiceGrpcImpl(repository, publisher, 20, 200,
                 new SuggestReplyCoordinator(repository, new NoOpSuggestRepliesPort(),
-                        new NoOpSuggestRequestPublisher(), 20));
+                        new NoOpSuggestRequestPublisher(), 20),
+                analytics);
 
         CapturingObserver<lingxi.session.v1.Session.CreateSessionResponse> observer = new CapturingObserver<>();
         service.createSession(
@@ -252,8 +257,99 @@ class SessionEventPublishTest {
         assertEquals(1, session.messageCount(), "仅追加了一条 AI 回答消息");
     }
 
+    // ---------- M5-5.1 分析埋点 ----------
+
+    @Test
+    void lifecycleStagesArePublishedForCreateMessageTakeoverAndClose() {
+        // 建会话即已发布 created（setUp 内建过一次会话）
+        assertEquals(List.of("created"), analytics.stages(), "建会话应发布 created 埋点");
+        assertEquals("tenant-1", analytics.lifecycle.get(0).tenantId(), "埋点需自带租户（会话域为内存实现，不可回溯）");
+        assertEquals("web", analytics.lifecycle.get(0).channel(), "埋点需自带渠道");
+
+        service.sendMessage(messageRequest("user", "退款多久到账"), new CapturingObserver<>());
+        service.takeOver(lingxi.session.v1.Session.TakeOverRequest.newBuilder()
+                .setSessionId(sessionId).setAgentId("agent-9").build(), new CapturingObserver<>());
+        service.changeState(lingxi.session.v1.Session.ChangeStateRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setTargetState(lingxi.session.v1.Session.SessionState.CLOSED)
+                .build(), new CapturingObserver<>());
+
+        assertEquals(List.of("created", "user_msg", "handoff", "closed"), analytics.stages(),
+                "用户消息 / 接管 / 关闭 各自发布对应阶段埋点");
+        assertEquals("agent-9", analytics.lifecycle.get(2).agentId(), "handoff 埋点应携带坐席");
+    }
+
+    @Test
+    void stateChangeToHumanAlsoPublishesHandoff() {
+        service.changeState(lingxi.session.v1.Session.ChangeStateRequest.newBuilder()
+                .setSessionId(sessionId)
+                .setTargetState(lingxi.session.v1.Session.SessionState.HUMAN_CHAT)
+                .setOperator("agent-7")
+                .build(), new CapturingObserver<>());
+
+        assertEquals(List.of("created", "handoff"), analytics.stages(), "状态迁至人工同样计入 handoff 阶段");
+    }
+
+    @Test
+    void submitFeedbackValidatesAndPublishes() {
+        // 会话不存在 → 拒绝
+        CapturingObserver<lingxi.session.v1.Session.SubmitFeedbackResponse> missing = new CapturingObserver<>();
+        service.submitFeedback(lingxi.session.v1.Session.SubmitFeedbackRequest.newBuilder()
+                .setSessionId("no-such-session").setRating(5).build(), missing);
+        assertFalse(missing.value.getOk(), "会话不存在应拒绝");
+
+        // 评分越界 → 拒绝
+        CapturingObserver<lingxi.session.v1.Session.SubmitFeedbackResponse> badRating = new CapturingObserver<>();
+        service.submitFeedback(lingxi.session.v1.Session.SubmitFeedbackRequest.newBuilder()
+                .setSessionId(sessionId).setRating(9).build(), badRating);
+        assertFalse(badRating.value.getOk(), "评分越界应拒绝");
+        assertTrue(analytics.feedback.isEmpty(), "被拒的评价不得产生埋点");
+
+        // 合法评价 → 通过，且租户/用户由服务端按会话解析
+        CapturingObserver<lingxi.session.v1.Session.SubmitFeedbackResponse> ok = new CapturingObserver<>();
+        service.submitFeedback(lingxi.session.v1.Session.SubmitFeedbackRequest.newBuilder()
+                .setSessionId(sessionId).setRating(5).setComment("  解答很清楚  ").build(), ok);
+        assertTrue(ok.value.getOk(), "合法评价应通过");
+        assertEquals(1, analytics.feedback.size(), "应发布一条满意度埋点");
+        assertEquals("tenant-1", analytics.feedback.get(0).tenantId(), "租户由会话解析（前端不传）");
+        assertEquals("u1", analytics.feedback.get(0).userId(), "用户由会话解析");
+        assertEquals("解答很清楚", analytics.feedback.get(0).comment(), "评价内容应去除首尾空白");
+    }
+
     private lingxi.session.v1.Session.SendMessageRequest messageRequest(String sender, String content) {
         return lingxi.session.v1.Session.SendMessageRequest.newBuilder()
                 .setSessionId(sessionId).setSender(sender).setSenderId("u1").setContent(content).build();
+    }
+
+    /** 记录型分析埋点替身（M5-5.1）：便于断言各阶段是否按预期发布。 */
+    private static final class RecordingAnalyticsPublisher implements AnalyticsEventPublisher {
+
+        private final List<Lifecycle> lifecycle = new ArrayList<>();
+        private final List<Feedback> feedback = new ArrayList<>();
+
+        @Override
+        public void publishLifecycle(String sessionId, String tenantId, String stage, String channel,
+                                     String userId, String agentId, String messageId) {
+            lifecycle.add(new Lifecycle(sessionId, tenantId, stage, channel, userId, agentId, messageId));
+        }
+
+        @Override
+        public void publishFeedback(String sessionId, String tenantId, String userId, int rating,
+                                   String comment, String tags) {
+            feedback.add(new Feedback(sessionId, tenantId, userId, rating, comment, tags));
+        }
+
+        /** 已发布的阶段序列（按发布顺序）。 */
+        private List<String> stages() {
+            return lifecycle.stream().map(Lifecycle::stage).toList();
+        }
+
+        private record Lifecycle(String sessionId, String tenantId, String stage, String channel,
+                                 String userId, String agentId, String messageId) {
+        }
+
+        private record Feedback(String sessionId, String tenantId, String userId, int rating,
+                                String comment, String tags) {
+        }
     }
 }

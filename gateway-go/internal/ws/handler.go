@@ -23,11 +23,17 @@ var upgrader = websocket.Upgrader{
 type Handler struct {
 	hub     *Hub
 	session SessionClient
+	// defaultTenant 默认租户：请求体未携带 tenant_id 时回落该值
+	// （生产由鉴权中间件按 JWT 注入真实租户，本地联调走默认租户）。
+	defaultTenant string
 }
 
 // NewHandler 创建 WSS 处理器。
-func NewHandler(hub *Hub, session SessionClient) *Handler {
-	return &Handler{hub: hub, session: session}
+func NewHandler(hub *Hub, session SessionClient, defaultTenant string) *Handler {
+	if defaultTenant == "" {
+		defaultTenant = "lingxi"
+	}
+	return &Handler{hub: hub, session: session, defaultTenant: defaultTenant}
 }
 
 // ServeWS 升级 HTTP 连接为 WSS 并接管会话长连接。
@@ -55,11 +61,13 @@ func (h *Handler) ServeWS(c *gin.Context) {
 }
 
 // CreateSession 用户端建会话入口：转发 Java 会话域，返回 session_id 供 WSS 连接。
-// 路由：POST /api/v1/session {user_id, channel}
+// 路由：POST /api/v1/session {user_id, channel, tenant_id?}
+// 租户注入：请求体未带 tenant_id 时回落网关默认租户（保证会话及其后续事件均归属租户）。
 func (h *Handler) CreateSession(c *gin.Context) {
 	var req struct {
-		UserID  string `json:"user_id"`
-		Channel string `json:"channel"`
+		UserID   string `json:"user_id"`
+		Channel  string `json:"channel"`
+		TenantID string `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "非法请求体"})
@@ -72,8 +80,11 @@ func (h *Handler) CreateSession(c *gin.Context) {
 	if req.Channel == "" {
 		req.Channel = "web"
 	}
+	if req.TenantID == "" {
+		req.TenantID = h.defaultTenant
+	}
 
-	sessionID, err := h.session.CreateSession(req.UserID, req.Channel)
+	sessionID, err := h.session.CreateSession(req.UserID, req.Channel, req.TenantID)
 	if err != nil {
 		log.Printf("create-session: 创建失败 user=%s err=%v", req.UserID, err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "会话创建失败"})

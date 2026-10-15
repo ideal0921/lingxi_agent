@@ -27,11 +27,13 @@ BOOTSTRAP="localhost:9092"
 # 工具链路（M4-4.3）：工具调用审计事件
 # 知识库链路（M3-3.2）：入库任务 → 入库结果回写 → 下线清理
 # 快捷回复链路（M4-4.6）：建议请求 → 建议异步结果（过载降级）
+# 分析管道（M5-5.1）：会话生命周期 / LLM 用量 / 满意度埋点（Java 报表域消费落库）
 TOPICS=("lingxi.session.message" "lingxi.ai.chunk" "lingxi.ai.reply" "lingxi.session.summary"
         "lingxi.tool.audit"
         "lingxi.ai.handoff" "lingxi.session.takeover"
         "lingxi.ai.suggest.request" "lingxi.ai.suggest.result"
-        "kb.doc.ingest" "kb.doc.indexed" "kb.doc.delete")
+        "kb.doc.ingest" "kb.doc.indexed" "kb.doc.delete"
+        "lingxi.analytics.event")
 PID_FILE="$KAFKA_DATA/kafka.pid"
 LOG_FILE="$KAFKA_DATA/kafka.log"
 

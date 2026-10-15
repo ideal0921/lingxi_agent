@@ -199,3 +199,62 @@ SET @add_canary_percent := (
 PREPARE stmt_canary_percent FROM @add_canary_percent;
 EXECUTE stmt_canary_percent;
 DEALLOCATE PREPARE stmt_canary_percent;
+
+-- M5-5.1 数据分析管道表结构（分析明细 + 会话漏斗 + Token 日聚合 + 满意度）
+-- 说明：会话域为内存实现，故分析明细是漏斗的**唯一事实源**；明细主键 event_id 保证 Kafka 重投幂等。
+-- 本期落 MySQL（仓储经依赖倒置端口，将来可平滑替换为 ClickHouse）。
+
+CREATE TABLE IF NOT EXISTS lingxi_analytics_event (
+    event_id    VARCHAR(64)  NOT NULL COMMENT '事件 ID（生产端生成一次，重投同 ID）',
+    event_type  VARCHAR(32)  NOT NULL COMMENT 'session_lifecycle / llm_usage / session_feedback',
+    tenant_id   VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '租户 ID',
+    session_id  VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '会话 ID',
+    occurred_at BIGINT       NOT NULL COMMENT '事件发生时间（epoch ms）',
+    payload     MEDIUMTEXT   NOT NULL COMMENT '事件体原文（JSON）',
+    PRIMARY KEY (event_id),
+    KEY idx_type_time (event_type, occurred_at),
+    KEY idx_tenant_time (tenant_id, occurred_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '分析明细事件表';
+
+CREATE TABLE IF NOT EXISTS lingxi_report_session_funnel (
+    session_id        VARCHAR(64) NOT NULL COMMENT '会话 ID',
+    tenant_id         VARCHAR(64) NOT NULL DEFAULT '' COMMENT '租户 ID',
+    channel           VARCHAR(32) NOT NULL DEFAULT '' COMMENT '接入渠道（建会话时写入，首次写入为准）',
+    created_ms        BIGINT      NULL COMMENT '建会话时间（最早）',
+    first_user_msg_ms BIGINT      NULL COMMENT '首条用户消息时间（最早）',
+    first_ai_reply_ms BIGINT      NULL COMMENT '首次 AI 应答时间（最早）',
+    handoff_ms        BIGINT      NULL COMMENT '首次转人工/接管时间（最早）',
+    closed_ms         BIGINT      NULL COMMENT '关闭时间（最早）',
+    updated_at        BIGINT      NOT NULL COMMENT '更新时间（epoch ms）',
+    PRIMARY KEY (session_id),
+    KEY idx_tenant_created (tenant_id, created_ms)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '会话漏斗表（一会话一行，各阶段存最早时间戳）';
+
+CREATE TABLE IF NOT EXISTS lingxi_report_token_daily (
+    stat_date          DATE        NOT NULL COMMENT '统计日（Asia/Shanghai）',
+    tenant_id          VARCHAR(64) NOT NULL DEFAULT '' COMMENT '租户 ID',
+    provider           VARCHAR(32) NOT NULL DEFAULT '' COMMENT '模型提供方',
+    model              VARCHAR(64) NOT NULL DEFAULT '' COMMENT '模型名',
+    requests           INT         NOT NULL DEFAULT 0 COMMENT 'LLM 调用次数（工具多轮各计一次）',
+    prompt_tokens      BIGINT      NOT NULL DEFAULT 0 COMMENT '输入 token 合计',
+    completion_tokens  BIGINT      NOT NULL DEFAULT 0 COMMENT '输出 token 合计',
+    estimated_requests INT         NOT NULL DEFAULT 0 COMMENT '其中按字符数估算的条数',
+    first_token_samples INT        NOT NULL DEFAULT 0 COMMENT '有首字延迟样本的条数（平均值分母）',
+    first_token_ms_sum BIGINT       NOT NULL DEFAULT 0 COMMENT '首字延迟合计（ms）',
+    updated_at         BIGINT      NOT NULL COMMENT '更新时间（epoch ms）',
+    PRIMARY KEY (stat_date, tenant_id, provider, model)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = 'Token 消耗日聚合表';
+
+CREATE TABLE IF NOT EXISTS lingxi_report_feedback (
+    feedback_id VARCHAR(64)  NOT NULL COMMENT '反馈 ID（UUID）',
+    session_id  VARCHAR(64)  NOT NULL COMMENT '会话 ID',
+    tenant_id   VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '租户 ID（由会话域解析，前端不传）',
+    user_id     VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '用户 ID',
+    rating      TINYINT      NOT NULL COMMENT '评分 1~5',
+    comment     VARCHAR(500) NOT NULL DEFAULT '' COMMENT '评价内容',
+    tags        VARCHAR(255) NOT NULL DEFAULT '' COMMENT '标签（逗号分隔）',
+    created_at  BIGINT       NOT NULL COMMENT '评价时间（epoch ms）',
+    PRIMARY KEY (feedback_id),
+    UNIQUE KEY uk_session (session_id),
+    KEY idx_tenant_time (tenant_id, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '会话满意度表（一会话一条，后评覆盖）';

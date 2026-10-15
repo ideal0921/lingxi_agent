@@ -19,6 +19,12 @@ const router = createRouter({
       name: 'studio',
       component: () => import('../views/studio/Index.vue'),
     },
+    {
+      // 运营报表（M5-5.1）：会话漏斗 / Token 消耗 / 满意度
+      path: '/report',
+      name: 'report',
+      component: () => import('../views/report/Index.vue'),
+    },
     // TODO(M2): 管理后台 /admin
   ],
 })

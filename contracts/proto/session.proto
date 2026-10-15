@@ -150,6 +150,22 @@ message SuggestRepliesResponse {
   int32 history_count = 8;        // 实际注入的上下文消息条数（观测用）
 }
 
+// ---------- 会话满意度（M5-5.1：用户端评价入口）----------
+
+// 提交满意度评价：**仅提交会话 ID、评分与意见**，租户/用户由服务端按会话解析
+// （禁止前端传 tenant_id，防越权伪造）。
+message SubmitFeedbackRequest {
+  string session_id = 1;
+  int32 rating = 2;            // 评分 1~5（越界拒绝）
+  string comment = 3;          // 评价内容（可选，服务端截断）
+  string tags = 4;             // 标签（逗号分隔，可选）
+}
+
+message SubmitFeedbackResponse {
+  bool ok = 1;
+  string reason = 2;           // 拒绝原因（会话不存在/评分越界等）
+}
+
 // 会话域服务：由 Java 实现，Go 网关通过 gRPC 调用
 service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
@@ -160,4 +176,5 @@ service SessionService {
   rpc TakeOver(TakeOverRequest) returns (TakeOverResponse);
   rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse);
   rpc SuggestReplies(SuggestRepliesRequest) returns (SuggestRepliesResponse);
+  rpc SubmitFeedback(SubmitFeedbackRequest) returns (SubmitFeedbackResponse);
 }

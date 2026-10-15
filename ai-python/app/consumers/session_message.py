@@ -33,6 +33,7 @@ from app.agent.handoff import decide_handoff
 from app.agent.memory import merge_profile, summarize_history
 from app.agent.state import ChatMessage, StreamKind
 from app.agent.workflow import stream_workflow_or_default
+from app.analytics import reset_scope, set_scope
 from app.config import Settings
 from app.messaging.kafka import KafkaProducer
 
@@ -85,6 +86,15 @@ def _parse_history(raw: Any) -> list[ChatMessage]:
         if role in _ALLOWED_ROLES and content:
             messages.append(ChatMessage(role=role, content=content))
     return messages
+
+
+def _prompt_chars(payload: dict[str, Any]) -> int:
+    """粗估本轮提示词字符数（正文 + 摘要 + 历史），供无真实 usage 时按字符估算 token。"""
+    total = len(str(payload.get("content") or "")) + len(str(payload.get("summary") or ""))
+    for item in payload.get("history") or []:
+        if isinstance(item, dict):
+            total += len(str(item.get("content") or ""))
+    return total
 
 
 def build_chunk_payload(
@@ -499,9 +509,21 @@ async def run_session_message_consumer(
     from app.messaging.kafka import consume_forever
 
     async def _handler(payload: dict[str, Any]) -> None:
-        await handle_session_message(
-            payload, config=config, producer=producer, retriever=retriever, gateway=gateway
+        # M5-5.1：以「一条用户消息」为本轮分析 scope（供 LLM 用量埋点归集）。
+        # 消费循环在**同一任务上下文**内反复调用本 handler，故必须在 finally 复位，
+        # 否则下一条消息会复用上一条的用量上下文（导致用量错记到错误会话）。
+        token = set_scope(
+            str(payload.get("tenant_id") or config.agent_default_tenant_id),
+            str(payload.get("session_id") or ""),
+            str(payload.get("message_id") or ""),
+            prompt_chars=_prompt_chars(payload),
         )
+        try:
+            await handle_session_message(
+                payload, config=config, producer=producer, retriever=retriever, gateway=gateway
+            )
+        finally:
+            reset_scope(token)
 
     await consume_forever(
         topic=config.kafka_topic_session_message,
