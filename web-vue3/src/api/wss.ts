@@ -4,15 +4,23 @@ import http from './http'
  * WSS 消息信封：与网关协议（gateway-go/internal/ws/message.go）保持一致。
  */
 export interface ChatEnvelope {
-  type: 'ping' | 'pong' | 'send' | 'ack' | 'chat' | 'chunk' | 'error' | 'resume'
+  type: 'ping' | 'pong' | 'send' | 'ack' | 'chat' | 'chunk' | 'error' | 'resume' | 'suggest'
   session_id?: string
   sender?: string
   content?: string
   seq?: number
   last_seq?: number
   message_id?: string
+  /** 请求标识（suggest 专用，M4-4.6）：用于同步/异步结果去重 */
+  request_id?: string
+  /** 回复建议候选（suggest 专用）：仅坐席端可见 */
+  suggestions?: string[]
   index?: number
   finished?: boolean
+  /** 本轮是否因人工接管而中断（chunk 专用，M4-4.5） */
+  interrupted?: boolean
+  /** 中断原因：agent_takeover / handoff_requested */
+  reason?: string
   timestamp_ms?: number
   error?: string
 }
@@ -27,17 +35,23 @@ export interface ChatMessage {
   timestamp: number
   /** 是否仍在流式生成中（打字机态，M3-3.8） */
   streaming?: boolean
+  /** 本轮回答是否因人工接管被中断（M4-4.5） */
+  interrupted?: boolean
 }
 
 /** 连接状态回调事件。 */
 export type WssEvent =
   | { type: 'chat'; message: ChatMessage }
-  | { type: 'chunk'; messageId: string; delta: string; index: number; finished: boolean; error: string }
+  | { type: 'chunk'; messageId: string; delta: string; index: number; finished: boolean; error: string; interrupted: boolean; reason: string }
   | { type: 'ack'; seq: number; messageId: string }
+  | { type: 'suggest'; sessionId: string; requestId: string; suggestions: string[] }
   | { type: 'error'; reason: string }
   | { type: 'status'; status: WsStatus }
 
 export type WsStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
+/** WSS 连接角色：坐席观察端用于接收「仅推坐席」的下行（如回复建议）。 */
+export type WssRole = 'user' | 'agent'
 
 /**
  * 创建会话：POST /api/v1/session（网关转发 Java 会话域）。
@@ -69,6 +83,8 @@ export class WssClient {
     private readonly sessionId: string,
     private readonly userId: string,
     private readonly onEvent: (ev: WssEvent) => void,
+    /** 连接角色：坐席观察端传 'agent'（缺省 user，不追加 role 查询参数）。 */
+    private readonly role: WssRole = 'user',
   ) {}
 
   /** 建立连接；断连后自动重连。 */
@@ -76,7 +92,9 @@ export class WssClient {
     this.closedByUser = false
     this.emitStatus('connecting')
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = `${protocol}://${location.host}/ws?session_id=${this.sessionId}`
+    // 坐席端追加 role=agent，网关据此仅向其推送「仅推坐席」下行（如回复建议）。
+    const roleQuery = this.role === 'agent' ? '&role=agent' : ''
+    const url = `${protocol}://${location.host}/ws?session_id=${this.sessionId}${roleQuery}`
     const socket = new WebSocket(url)
     this.socket = socket
 
@@ -169,6 +187,17 @@ export class WssClient {
           index: env.index ?? 0,
           finished: env.finished === true,
           error: env.error ?? '',
+          interrupted: env.interrupted === true,
+          reason: env.reason ?? '',
+        })
+        break
+      case 'suggest':
+        // 过载降级后 Java→Kafka→网关异步推送的候选建议（仅坐席端可见）。
+        this.onEvent({
+          type: 'suggest',
+          sessionId: env.session_id ?? this.sessionId,
+          requestId: env.request_id ?? '',
+          suggestions: env.suggestions ?? [],
         })
         break
       case 'error':

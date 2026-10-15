@@ -40,7 +40,7 @@ export function useChat() {
           mergeMessage(ev.message)
           break
         case 'chunk':
-          applyChunk(ev.messageId, ev.delta, ev.finished, ev.error)
+          applyChunk(ev.messageId, ev.delta, ev.finished, ev.error, ev.interrupted)
           break
         case 'ack':
           markSent(ev.messageId, ev.seq)
@@ -72,11 +72,19 @@ export function useChat() {
 
   /**
    * 应用流式片段（打字机）：首帧创建助手消息，后续按序累加；终帧结束打字机态。
+   * interrupted 为真表示本轮因人工接管被中断，与 finished 一致地结束打字机态，
+   * 并在消息上标记 interrupted（正常业务态，不写入 error）。
    */
-  function applyChunk(messageId: string, delta: string, finished: boolean, chunkError: string): void {
+  function applyChunk(
+    messageId: string,
+    delta: string,
+    finished: boolean,
+    chunkError: string,
+    interrupted = false,
+  ): void {
     if (!messageId) return
     let target = messages.value.find((m) => m.id === messageId)
-    if (!target && !finished) {
+    if (!target && !finished && !interrupted) {
       target = {
         id: messageId,
         sessionId,
@@ -90,7 +98,8 @@ export function useChat() {
     }
     if (target) {
       if (delta) target.content += delta
-      if (finished) target.streaming = false
+      if (finished || interrupted) target.streaming = false
+      if (interrupted) target.interrupted = true
     }
     if (finished && chunkError) error.value = chunkError
   }

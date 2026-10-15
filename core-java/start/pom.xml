@@ -41,6 +41,16 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-business</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-workflow</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
@@ -75,6 +85,14 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- 进程内 gRPC 传输（M4-4.6 同步通道离线单测）：不触网，仅测试期使用。
+             版本与 gateway-api 的 grpc.version 保持一致 -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-inprocess</artifactId>
+            <version>1.71.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

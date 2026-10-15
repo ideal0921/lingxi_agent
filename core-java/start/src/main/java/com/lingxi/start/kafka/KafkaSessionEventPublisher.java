@@ -22,6 +22,7 @@ import com.lingxi.session.model.SessionMessage;
 /**
  * 会话事件 Kafka 生产者（M3-3.8；M3-3.11 携上下文窗口）：
  * 把用户消息 + 近 N 轮历史 + 会话摘要投递到 {@code lingxi.session.message}，
+ * 并携带用户身份（user_id）供 AI 域隔离用户级长期记忆，
  * 由 AI 域消费并流式应答。仅在 {@code lingxi.kafka.enabled=true} 时装配。
  *
  * <p>以 {@code session_id} 作为消息键，保证同一会话的事件有序落到同一分区。</p>
@@ -35,21 +36,25 @@ public class KafkaSessionEventPublisher implements SessionEventPublisher {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final String topic;
+    private final String takeoverTopic;
 
     public KafkaSessionEventPublisher(KafkaTemplate<String, String> kafkaTemplate,
                                       ObjectMapper objectMapper,
-                                      @Value("${lingxi.kafka.topic.session-message:lingxi.session.message}") String topic) {
+                                      @Value("${lingxi.kafka.topic.session-message:lingxi.session.message}") String topic,
+                                      @Value("${lingxi.kafka.topic.session-takeover:lingxi.session.takeover}") String takeoverTopic) {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.topic = topic;
+        this.takeoverTopic = takeoverTopic;
     }
 
     @Override
-    public void publishUserMessage(String sessionId, String tenantId, String messageId, long seq, String content,
-                                   String summary, List<SessionMessage> history) {
+    public void publishUserMessage(String sessionId, String tenantId, String userId, String messageId, long seq,
+                                   String content, String summary, List<SessionMessage> history) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("session_id", sessionId);
         payload.put("tenant_id", tenantId == null ? "" : tenantId);
+        payload.put("user_id", userId == null ? "" : userId);
         payload.put("message_id", messageId);
         payload.put("seq", seq);
         payload.put("content", content);
@@ -74,6 +79,35 @@ public class KafkaSessionEventPublisher implements SessionEventPublisher {
             } else {
                 log.debug("用户消息事件已投递 sessionId={} seq={} 历史条数={} partition={}", sessionId, seq,
                         history == null ? 0 : history.size(), result.getRecordMetadata().partition());
+            }
+        });
+    }
+
+    @Override
+    public void publishTakeover(String sessionId, String reason, String agentId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("session_id", sessionId);
+        payload.put("reason", reason == null ? "" : reason);
+        payload.put("agent_id", agentId == null ? "" : agentId);
+        payload.put("at_ms", System.currentTimeMillis());
+
+        final String json;
+        try {
+            json = objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            // 序列化失败属于编码缺陷，记录后不抛出，避免拖垮 gRPC 应答链路
+            log.error("接管事件序列化失败 sessionId={} reason={}", sessionId, reason, e);
+            return;
+        }
+
+        CompletableFuture<SendResult<String, String>> future = kafkaTemplate.send(takeoverTopic, sessionId, json);
+        future.whenComplete((result, ex) -> {
+            if (ex != null) {
+                // 投递失败不回滚已完成的接管：AI 侧未能即时终止，属尽力而为
+                log.error("接管事件投递失败 sessionId={} reason={}", sessionId, reason, ex);
+            } else {
+                log.debug("接管事件已投递 sessionId={} reason={} partition={}", sessionId, reason,
+                        result.getRecordMetadata().partition());
             }
         });
     }

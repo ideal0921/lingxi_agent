@@ -78,4 +78,44 @@ class SessionStateMachineTest {
     void 非法迁移_人工会话切回AI_应被拒绝() {
         assertFalse(SessionStateMachine.canTransition(State.HUMAN_CHAT, State.AI_ACTIVE));
     }
+
+    @Test
+    void 合法迁移_init转人工_应允许() {
+        assertTrue(SessionStateMachine.canTransition(State.INIT, State.WAITING_HUMAN));
+        assertEquals(State.WAITING_HUMAN, SessionStateMachine.transition(State.INIT, State.WAITING_HUMAN));
+    }
+
+    @Test
+    void 合法迁移_AI会话转人工_应允许() {
+        assertTrue(SessionStateMachine.canTransition(State.AI_ACTIVE, State.WAITING_HUMAN));
+        assertEquals(State.WAITING_HUMAN, SessionStateMachine.transition(State.AI_ACTIVE, State.WAITING_HUMAN));
+    }
+
+    @Test
+    void 合法迁移_待人工接入到坐席受理_应允许() {
+        assertTrue(SessionStateMachine.canTransition(State.WAITING_HUMAN, State.HUMAN_CHAT));
+        assertEquals(State.HUMAN_CHAT, SessionStateMachine.transition(State.WAITING_HUMAN, State.HUMAN_CHAT));
+    }
+
+    @Test
+    void 合法迁移_待人工接入直接关闭_应允许() {
+        assertTrue(SessionStateMachine.canTransition(State.WAITING_HUMAN, State.CLOSED));
+    }
+
+    @Test
+    void 非法迁移_待人工接入回退AI_应被拒绝() {
+        assertFalse(SessionStateMachine.canTransition(State.WAITING_HUMAN, State.AI_ACTIVE));
+        assertThrows(IllegalStateTransitionException.class,
+                () -> SessionStateMachine.transition(State.WAITING_HUMAN, State.AI_ACTIVE));
+    }
+
+    @Test
+    void 非法迁移_待人工接入回退init_应被拒绝() {
+        assertFalse(SessionStateMachine.canTransition(State.WAITING_HUMAN, State.INIT));
+    }
+
+    @Test
+    void 非法迁移_人工会话转回待人工_应被拒绝() {
+        assertFalse(SessionStateMachine.canTransition(State.HUMAN_CHAT, State.WAITING_HUMAN));
+    }
 }

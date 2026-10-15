@@ -24,6 +24,8 @@
         <module>session</module>
         <module>ticket</module>
         <module>knowledge</module>
+        <module>business</module>
+        <module>workflow</module>
         <module>start</module>
     </modules>
 

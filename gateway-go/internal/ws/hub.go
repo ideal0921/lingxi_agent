@@ -68,6 +68,25 @@ func (h *Hub) BroadcastExcept(sessionID string, exclude *Client, env *Envelope) 
 	}
 }
 
+// BroadcastToRole 仅向指定会话中角色匹配的连接推送（如建议结果仅推坐席端，防泄漏给用户端）。
+//
+// 与 BroadcastExcept 同样先快照再释放读锁，避免持锁期间执行网络写操作。
+func (h *Hub) BroadcastToRole(sessionID, role string, env *Envelope) {
+	h.mu.RLock()
+	set := h.clients[sessionID]
+	targets := make([]*Client, 0, len(set))
+	for c := range set {
+		if c.Role() == role {
+			targets = append(targets, c)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, c := range targets {
+		c.deliver(env)
+	}
+}
+
 // Count 返回指定会话当前的连接数（用于观测与测试）。
 func (h *Hub) Count(sessionID string) int {
 	h.mu.RLock()

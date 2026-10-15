@@ -54,3 +54,71 @@ class TestLazySingleton:
         finally:
             runtime._singletons.pop("store", None)
             runtime._singletons.pop("retriever", None)
+
+    async def test_tool_singletons_are_assembled_awaited(self, monkeypatch) -> None:
+        """回归防护（M4-4.1）：工具单例的工厂必须是协程。
+
+        此前 `_build_tool_registry` / `_build_tool_executor` 为同步函数，`_get` 中
+        `await factory()` 会抛 "object can't be awaited"，导致工具链路在真实链路上
+        静默降级为「无工具应答」（表现为模型不去查订单而直接转人工）。
+        """
+        from app.agent.tools.executor import ToolExecutor
+        from app.agent.tools.registry import ToolRegistry
+
+        monkeypatch.setattr(runtime.settings, "kafka_enabled", False)  # 不建 Kafka 连接
+        for name in ("business_client", "tool_registry", "tool_executor"):
+            runtime._singletons.pop(name, None)
+
+        try:
+            async with asyncio.timeout(5):
+                registry = await runtime.get_tool_registry()
+                executor = await runtime.get_tool_executor()
+        finally:
+            for name in ("business_client", "tool_registry", "tool_executor"):
+                runtime._singletons.pop(name, None)
+
+        assert isinstance(registry, ToolRegistry)
+        assert isinstance(executor, ToolExecutor)
+        assert set(registry.names()) == {"get_order", "get_logistics", "submit_return"}
+        assert executor.registry is registry, "执行器应复用同一注册表实例"
+
+
+class TestMemoryStoreSingleton:
+    async def test_assembles_user_profile_store(self) -> None:
+        """回归防护（M4-4.4）：画像存储单例惰性装配（构造阶段不建 Redis 连接）。
+
+        工厂必须是协程（``_get`` 会 await 返回值），且装配后按 tenant+user 生成 key。
+        """
+        from app.agent.memory_store import UserProfileStore
+
+        runtime._singletons.pop("memory_store", None)
+
+        try:
+            async with asyncio.timeout(5):
+                store = await runtime.get_memory_store()
+        finally:
+            runtime._singletons.pop("memory_store", None)
+
+        assert isinstance(store, UserProfileStore)
+        assert store.profile_key("t1", "u1") == "lingxi:memory:profile:t1:u1"
+        assert store.profile_key("t1", "") is None, "缺 user_id 时不产生 key"
+
+    async def test_shutdown_releases_memory_store(self) -> None:
+        """停机时应释放记忆连接池。"""
+        store = _ClosableStore()
+        runtime._singletons["memory_store"] = store
+        try:
+            async with asyncio.timeout(5):
+                await runtime.shutdown()
+        finally:
+            runtime._singletons.pop("memory_store", None)
+
+        assert store.closed is True
+
+
+class _ClosableStore:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True

@@ -6,9 +6,10 @@ package lingxi.session.v1;
 
 option go_package = "github.com/lingxi/gateway-go/proto/sessionv1";
 
-// 会话状态：状态机迁移（M3-3.11 AI 化后）
-//   INIT → {AI_ACTIVE, HUMAN_CHAT, CLOSED}
-//   AI_ACTIVE → {HUMAN_CHAT, CLOSED}（AI 应答中；坐席接管即退出 AI）
+// 会话状态：状态机迁移（M3-3.11 AI 化 + M4-4.5 转人工联动后）
+//   INIT → {AI_ACTIVE, WAITING_HUMAN, HUMAN_CHAT, CLOSED}
+//   AI_ACTIVE → {WAITING_HUMAN, HUMAN_CHAT, CLOSED}（AI 应答中；转人工/坐席接管即退出 AI）
+//   WAITING_HUMAN → {HUMAN_CHAT, CLOSED}（待人工接入；仍在客服队列，AI 不再应答）
 //   HUMAN_CHAT → {CLOSED}
 // 非法迁移与重复关闭必须被拒绝，由 Java 会话域保证。
 enum SessionState {
@@ -17,6 +18,7 @@ enum SessionState {
   HUMAN_CHAT = 2;           // 人工会话中（坐席接管后）
   CLOSED = 3;               // 已关闭
   AI_ACTIVE = 4;            // AI 应答中（用户消息触发 AI 后的持续状态）
+  WAITING_HUMAN = 5;        // 待人工接入（AI 请求转人工后；仍在队列，AI 已退出）
 }
 
 // 建会话请求
@@ -92,6 +94,7 @@ message SessionSummary {
   int64 created_at_ms = 5;
   int64 updated_at_ms = 6;
   int32 message_count = 7;
+  string summary = 8;                // 上下文摘要预览（M4-4.5 摘要移交；服务端截断后下发）
 }
 
 // 待接管会话列表（客服队列）
@@ -124,6 +127,29 @@ message ListAgentSessionsResponse {
   repeated SessionSummary sessions = 1;
 }
 
+// ---------- 坐席快捷回复（M4-4.6：Go → Java → Python 同步通道）----------
+
+// 生成回复建议请求：上下文由 Java 侧组装，同步通道不走上文检索
+message SuggestRepliesRequest {
+  string request_id = 1;          // 三端贯穿的请求标识（用于结果去重与链路追踪）
+  string session_id = 2;
+  string agent_id = 3;
+  string intent = 4;              // 坐席意图/要点（可选，供模型聚焦）
+  int32 max_suggestions = 5;      // 期望候选条数上限（0 表示用服务端默认）
+}
+
+// 生成回复建议响应
+message SuggestRepliesResponse {
+  bool ok = 1;                    // 是否成功产出候选（degraded 且 queued 时为 false）
+  bool degraded = 2;              // 是否降级（同步通道过载/超时）
+  string degrade_reason = 3;      // 降级原因：BUSY / TIMEOUT / UNAVAILABLE
+  bool queued = 4;                // 是否已转入异步队列（true 时结果稍后经坐席端推送）
+  string request_id = 5;
+  repeated string suggestions = 6; // 候选回复（1~3 条，供坐席选择/编辑）
+  int64 elapsed_ms = 7;           // 本次同步耗时
+  int32 history_count = 8;        // 实际注入的上下文消息条数（观测用）
+}
+
 // 会话域服务：由 Java 实现，Go 网关通过 gRPC 调用
 service SessionService {
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
@@ -133,4 +159,5 @@ service SessionService {
   rpc ListWaitingSessions(ListWaitingSessionsRequest) returns (ListWaitingSessionsResponse);
   rpc TakeOver(TakeOverRequest) returns (TakeOverResponse);
   rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse);
+  rpc SuggestReplies(SuggestRepliesRequest) returns (SuggestRepliesResponse);
 }

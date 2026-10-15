@@ -31,6 +31,16 @@
             {{ msg.content }}<span v-if="msg.streaming" class="caret">▍</span>
           </div>
           <div class="meta">{{ senderLabel(msg.sender) }} · {{ msg.seq || '…' }}</div>
+          <!-- 人工接管中断提示（M4-4.5）：正常业务态，非错误 -->
+          <n-alert
+            v-if="msg.interrupted"
+            class="takeover-hint"
+            type="warning"
+            :show-icon="false"
+            size="small"
+          >
+            已转人工，正在为您安排坐席
+          </n-alert>
         </div>
       </div>
 
@@ -168,6 +178,12 @@ function scrollToBottom(): void {
   margin-top: 2px;
   font-size: 12px;
   color: #999;
+}
+
+/* 人工接管中断提示：与消息同宽上限，复用 naive-ui 警告样式 */
+.takeover-hint {
+  margin-top: 4px;
+  max-width: 70%;
 }
 
 /* 流式打字机光标：仅在 streaming 状态下闪烁，提示回答仍在生成 */

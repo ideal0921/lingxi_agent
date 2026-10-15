@@ -53,16 +53,35 @@ lingxi:
       ai-reply: ${LINGXI_KAFKA_TOPIC_AI_REPLY:lingxi.ai.reply}
       # 上下文窗口（M3-3.11）：AI 域压缩旧消息后回写会话摘要
       session-summary: ${LINGXI_KAFKA_TOPIC_SESSION_SUMMARY:lingxi.session.summary}
+      # 人工接管联动（M4-4.5）：AI 域请求转人工 / 会话域通知 AI 终止生成
+      ai-handoff: ${LINGXI_KAFKA_TOPIC_AI_HANDOFF:lingxi.ai.handoff}
+      session-takeover: ${LINGXI_KAFKA_TOPIC_SESSION_TAKEOVER:lingxi.session.takeover}
       # 知识库入库链路（M3-3.2）：投递入库任务 / 消费入库结果 / 投递下线清理
       kb-ingest: ${LINGXI_KAFKA_TOPIC_KB_INGEST:kb.doc.ingest}
       kb-indexed: ${LINGXI_KAFKA_TOPIC_KB_INDEXED:kb.doc.indexed}
       kb-delete: ${LINGXI_KAFKA_TOPIC_KB_DELETE:kb.doc.delete}
+      # 坐席快捷回复（M4-4.6）：同步通道降级时转入异步队列
+      ai-suggest-request: ${LINGXI_KAFKA_TOPIC_AI_SUGGEST_REQUEST:lingxi.ai.suggest.request}
     consumer-group: ${LINGXI_KAFKA_CONSUMER_GROUP_CORE:core-java}
   session:
     # 上下文窗口（M3-3.11）：随用户消息事件带给 AI 域的「近 N 轮」消息条数上限。
     # 需大于 AI 侧的保持窗口（LINGXI_AGENT_HISTORY_MAX_MESSAGES=20），
     # 否则落在窗口外的旧消息不会出现在事件中、摘要无从产生。
     history-limit: ${LINGXI_SESSION_HISTORY_LIMIT:40}
+    # 摘要移交（M4-4.5）：客服队列下发的摘要预览截断长度（字符），
+    # 避免长摘要随列表 payload 膨胀；坐席接管后仍可从会话实体取完整摘要。
+    summary-preview-len: ${LINGXI_SESSION_SUMMARY_PREVIEW_LEN:200}
+  suggest:
+    # 坐席快捷回复同步通道（M4-4.6）：Go 端 5s > Java 出站 4s > Python 生成 3.5s 的超时预算。
+    # 关闭时不建连、不发起同步调用，快捷回复整体降级。
+    enabled: ${LINGXI_SUGGEST_ENABLED:true}
+    python-target: ${LINGXI_SUGGEST_PYTHON_TARGET:127.0.0.1:9095}
+    timeout-ms: ${LINGXI_SUGGEST_TIMEOUT_MS:4000}
+    # 注入 AI 域的「近 N 轮」上下文条数上限（摘要 + 近期消息）
+    history-limit: ${LINGXI_SUGGEST_HISTORY_LIMIT:20}
+  workflow:
+    # 编排域（M4-4.7）：图定义 JSON 大小上限（字节）。发布前会全量校验，保存草稿仅校验可解析性。
+    definition-max-bytes: ${LINGXI_WORKFLOW_DEFINITION_MAX_BYTES:262144}
   kb:
     minio:
       # 对象存储（本地复用 Milvus 的 minio 容器；生产改用 OSS 时替换端点与凭据）

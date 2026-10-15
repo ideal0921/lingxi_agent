@@ -4,6 +4,7 @@ import {
   listAgentSessions,
   takeOver,
   agentReply,
+  suggestReplies,
   createTicket,
   listTickets,
   updateTicketStatus,
@@ -37,6 +38,17 @@ export function useWorkbench() {
   const tickets = ref<Ticket[]>([])
   const wsStatus = ref<WsStatus>('disconnected')
   const error = ref('')
+
+  // 回复草稿：坐席手动输入或应用「快捷回复」候选后编辑发送。
+  const draft = ref('')
+  // 快捷回复建议（M4-4.6）：候选列表、请求中态与降级提示。
+  const suggestions = ref<string[]>([])
+  const suggesting = ref(false)
+  const suggestNotice = ref('')
+  // 已同步返回的 request_id：异步推送同 id 时忽略，避免重复填充。
+  const seenRequestIds = new Set<string>()
+  // 最近一次在途请求标识。
+  let pendingRequestId = ''
 
   let observer: WssClient | null = null
   let pollTimer: number | null = null
@@ -79,22 +91,41 @@ export function useWorkbench() {
   function selectSession(session: SessionSummary): void {
     selected.value = session
     messages.value = []
+    // 会话切换：重置回复草稿与快捷回复相关状态，避免串会话。
+    draft.value = ''
+    suggestions.value = []
+    suggestNotice.value = ''
+    suggesting.value = false
+    pendingRequestId = ''
     observer?.disconnect()
-    observer = new WssClient(session.session_id, agentId, (ev) => {
-      switch (ev.type) {
-        case 'status':
-          wsStatus.value = ev.status
-          break
-        case 'chat':
-          messages.value.push(ev.message)
-          break
-        case 'error':
-          error.value = ev.reason
-          break
-        default:
-          break
-      }
-    })
+    // role='agent'：坐席观察端，可接收「仅推坐席」下行（如快捷回复建议）。
+    observer = new WssClient(
+      session.session_id,
+      agentId,
+      (ev) => {
+        switch (ev.type) {
+          case 'status':
+            wsStatus.value = ev.status
+            break
+          case 'chat':
+            messages.value.push(ev.message)
+            break
+          case 'suggest':
+            // 同步已返回过的 request_id → 忽略（防重复）；否则填充异步候选。
+            if (seenRequestIds.has(ev.requestId)) break
+            suggestions.value = ev.suggestions
+            suggestNotice.value = ''
+            if (ev.requestId === pendingRequestId) pendingRequestId = ''
+            break
+          case 'error':
+            error.value = ev.reason
+            break
+          default:
+            break
+        }
+      },
+      'agent',
+    )
     observer.resumeFrom(0)
     observer.connect()
     void loadTickets(session)
@@ -112,6 +143,47 @@ export function useWorkbench() {
     } catch {
       error.value = '消息发送失败，请重试'
     }
+  }
+
+  /**
+   * 快捷回复：请求同步建议（1~3 条候选草稿）。
+   * - ok 且有候选 → 填充候选并记录 request_id（异步同 id 推送将被忽略）；
+   * - degraded+queued → 清空候选，提示结果稍后经坐席端 WSS 推送；
+   * - 其余降级/失败 → 提示重试。
+   */
+  async function requestSuggest(intent?: string): Promise<void> {
+    const session = selected.value
+    if (!session || suggesting.value) return
+    suggesting.value = true
+    suggestNotice.value = ''
+    try {
+      const result = await suggestReplies({
+        session_id: session.session_id,
+        agent_id: agentId,
+        intent,
+      })
+      pendingRequestId = result.request_id
+      if (result.ok && result.suggestions.length > 0) {
+        suggestions.value = result.suggestions
+        seenRequestIds.add(result.request_id)
+      } else if (result.degraded && result.queued) {
+        suggestions.value = []
+        suggestNotice.value = '已转异步排队，结果稍后推送'
+      } else {
+        suggestions.value = []
+        suggestNotice.value = '建议生成失败，请重试'
+      }
+    } catch {
+      suggestions.value = []
+      suggestNotice.value = '建议生成失败，请重试'
+    } finally {
+      suggesting.value = false
+    }
+  }
+
+  /** 应用候选：写入回复草稿，供坐席编辑后 sendReply。 */
+  function applySuggestion(text: string): void {
+    draft.value = text
   }
 
   /** 一键建单（关联当前会话与用户）。 */
@@ -173,11 +245,17 @@ export function useWorkbench() {
     tickets,
     wsStatus,
     error,
+    draft,
+    suggestions,
+    suggesting,
+    suggestNotice,
     init,
     refresh,
     takeOverSession,
     selectSession,
     sendReply,
+    requestSuggest,
+    applySuggestion,
     createTicketForSession,
     transitionTicket,
   }

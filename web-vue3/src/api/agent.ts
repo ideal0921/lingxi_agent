@@ -14,6 +14,8 @@ export interface SessionSummary {
   created_at_ms: number
   updated_at_ms: number
   message_count: number
+  /** 上下文摘要预览（M4-4.5 摘要移交；服务端截断后下发，可空） */
+  summary?: string
 }
 
 /** 工单状态。 */
@@ -45,6 +47,24 @@ export interface TicketTransitionResult {
   ok: boolean
   reason: string
   ticket: Ticket
+}
+
+/** 回复建议结果（M4-4.6 同步通道）。 */
+export interface SuggestRepliesResult {
+  /** 三端贯穿的请求标识，用于同步/异步结果去重。 */
+  request_id: string
+  /** 是否成功产出候选（degraded 且 queued 时为 false）。 */
+  ok: boolean
+  /** 是否降级（同步通道过载/超时）。 */
+  degraded: boolean
+  /** 降级原因：BUSY / TIMEOUT / UNAVAILABLE。 */
+  degrade_reason: string
+  /** 是否已转异步队列（true 时结果稍后经坐席端 WSS 推送）。 */
+  queued: boolean
+  /** 候选回复（1~3 条，供坐席选择/编辑）。 */
+  suggestions: string[]
+  /** 本次同步耗时。 */
+  elapsed_ms: number
 }
 
 /** 客服队列：待接管会话列表。 */
@@ -82,6 +102,19 @@ export async function agentReply(
     content,
     agent_id: agentId,
   })) as { seq: number; message_id: string }
+}
+
+/**
+ * 快捷回复建议：调 Java 同步通道取 1~3 条候选草稿。
+ * 过载时服务端可能返回 degraded+queued（已转异步），结果稍后经坐席端 WSS 推送。
+ */
+export async function suggestReplies(payload: {
+  session_id: string
+  agent_id: string
+  intent?: string
+  max_suggestions?: number
+}): Promise<SuggestRepliesResult> {
+  return (await http.post('/agent/suggest', payload)) as SuggestRepliesResult
 }
 
 /** 一键建单。 */

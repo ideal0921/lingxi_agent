@@ -36,10 +36,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent.state import AgentState, ChatMessage, StreamEvent, StreamKind
+from app.agent.tool_loop import build_tool_messages, stream_tool_answer
 from app.config import settings
 from app.privacy import PiiMasker
 
 if TYPE_CHECKING:  # 仅类型标注：保持本模块可离线导入（不拉起 Milvus / LLM 具体实现）
+    from app.agent.tools.executor import ToolExecutor
+    from app.agent.tools.registry import ToolRegistry
+    from app.agent.tools.spec import ToolContext
     from app.rag.retrieve import RetrievalHit, Retriever
 
 logger = logging.getLogger(__name__)
@@ -58,6 +62,9 @@ _SYSTEM_PROMPT = (
     "若知识片段不足以回答，请如实说明并建议转人工，禁止编造。"
 )
 
+# 供编排运行时（M4-4.8）复用默认人设：`llm` 节点未配置 system_prompt 时沿用它
+DEFAULT_SYSTEM_PROMPT = _SYSTEM_PROMPT
+
 
 def format_context(hits: Sequence[RetrievalHit]) -> str:
     """把检索命中拼装为带来源标注的知识片段。
@@ -72,12 +79,21 @@ def format_context(hits: Sequence[RetrievalHit]) -> str:
     return "\n\n".join(blocks)
 
 
-def build_prompt(state: AgentState) -> str:
-    """按「系统提示 + 会话摘要 + 知识片段 + 对话历史 + 用户问题」拼装提示词。
+def build_prompt(state: AgentState, *, system_prompt: str | None = None) -> str:
+    """按「系统提示 + 用户长期记忆 + 会话摘要 + 知识片段 + 对话历史 + 用户问题」拼装提示词。
 
-    未检索到知识时显式写入占位说明，引导模型如实拒答而非编造。
+    分层记忆（M4-4.4）：**跨会话的长期画像在前，会话内摘要其后**（长期信息优先于
+    本会话上下文）；未检索到知识时显式写入占位说明，引导模型如实拒答而非编造。
+
+    Args:
+        state: 单轮对话状态（取 query/history/context_text/summary/memory）。
+        system_prompt: 覆盖默认人设（M4-4.8：编排的 ``llm`` 节点可自带系统提示）。
     """
-    parts: list[str] = [_SYSTEM_PROMPT]
+    parts: list[str] = [(system_prompt or "").strip() or _SYSTEM_PROMPT]
+    # 跨会话长期记忆（M4-4.4）：用户级画像，先于会话级摘要注入
+    memory = (state.get("memory") or "").strip()
+    if memory:
+        parts.append("【用户长期记忆】\n" + memory)
     # 上下文窗口（M3-3.11）：超出窗口的旧对话已压缩为摘要，先于近期历史注入
     summary = (state.get("summary") or "").strip()
     if summary:
@@ -97,23 +113,23 @@ def build_prompt(state: AgentState) -> str:
     return "\n\n".join(parts)
 
 
-def _trim_history(history: Sequence[ChatMessage], limit: int) -> list[ChatMessage]:
+def trim_history(history: Sequence[ChatMessage], limit: int) -> list[ChatMessage]:
     """按上限裁剪近期对话，避免提示词无限膨胀（limit<=0 表示不裁剪）。"""
     items = list(history)
     return items[-limit:] if limit > 0 else items
 
 
-def _new_masker() -> PiiMasker:
+def new_masker() -> PiiMasker:
     """按配置创建会话级脱敏器（一次对话/一次流转共用一个）。"""
     return PiiMasker(enabled=settings.pii_enabled, mask_address=settings.pii_mask_address)
 
 
-def _mask_history(masker: PiiMasker, history: Sequence[ChatMessage]) -> list[ChatMessage]:
+def mask_history(masker: PiiMasker, history: Sequence[ChatMessage]) -> list[ChatMessage]:
     """脱敏历史消息（新建对象，避免就地修改调用方持有的历史）。"""
     return [ChatMessage(role=message.role, content=masker.mask(message.content)) for message in history]
 
 
-def _retrieve_contexts(
+def retrieve_contexts(
     retriever: Retriever | None, query: str, tenant_id: str, kb_id: str | None
 ) -> tuple[list[RetrievalHit], str]:
     """执行混合检索并返回（命中列表, 知识片段文本）；失败降级为无上下文。"""
@@ -151,10 +167,10 @@ def build_graph(
 
     async def load_context(state: AgentState) -> dict[str, Any]:
         """加载上下文：取近期对话并按上限裁剪，同时对历史与本轮问题做 PII 脱敏。"""
-        masker = _new_masker()
-        trimmed = _trim_history(state.get("history") or [], limit)
+        masker = new_masker()
+        trimmed = trim_history(state.get("history") or [], limit)
         return {
-            "history": _mask_history(masker, trimmed),
+            "history": mask_history(masker, trimmed),
             "query_masked": masker.mask(state.get("query", "")),
             "pii_masker": masker,
         }
@@ -168,7 +184,7 @@ def build_graph(
         masker = state.get("pii_masker")
         query = state.get("query_masked") or state.get("query", "")
         hits, context_text = await asyncio.to_thread(
-            _retrieve_contexts, retriever, query, state.get("tenant_id", ""), state.get("kb_id")
+            retrieve_contexts, retriever, query, state.get("tenant_id", ""), state.get("kb_id")
         )
         if masker is not None and context_text:
             context_text = masker.mask(context_text)
@@ -177,12 +193,15 @@ def build_graph(
     async def generate(state: AgentState) -> dict[str, Any]:
         """拼装提示词并调用 LLM 网关生成；输入已脱敏，输出还原为原文。"""
         masker = state.get("pii_masker")
+        memory = state.get("memory", "")
         prompt = build_prompt(
             {
                 "query": state.get("query_masked") or state.get("query", ""),
                 "history": state.get("history"),
                 "context_text": state.get("context_text"),
                 "summary": state.get("summary", ""),
+                # 跨会话长期记忆（M4-4.4）：进模型前脱敏（防历史脏数据携带 PII）
+                "memory": masker.mask(memory) if masker is not None else memory,
             }
         )
         answer = await gateway.generate(prompt)
@@ -209,14 +228,23 @@ async def stream_answer(
     kb_id: str | None = None,
     history: Sequence[ChatMessage] | None = None,
     summary: str = "",
+    memory: str = "",
     retriever: Retriever | None = None,
     history_max_messages: int | None = None,
+    tool_registry: ToolRegistry | None = None,
+    tool_executor: ToolExecutor | None = None,
+    tool_context: ToolContext | None = None,
+    tool_max_rounds: int = 3,
 ) -> AsyncIterator[StreamEvent]:
     """流式生成一轮回答（M3-3.8）：先产出上下文事件，再逐片段产出增量。
 
     复用非流式图的「历史裁剪 → 检索 → 提示词拼装」逻辑，保证两条路径**提示词与
     上下文完全一致**（避免流式/非流式答案漂移）；检索失败同样降级为空上下文。
-    查询、历史与知识片段在进模型前脱敏，流出片段在产出后**按占位符边界缓冲还原**。
+    查询、历史、知识片段与**用户长期记忆**在进模型前脱敏，流出片段在产出后按
+    占位符边界缓冲还原。
+
+    Args:
+        memory: 跨会话用户长期记忆（M4-4.4，用户级画像）；空串表示无记忆。
 
     Yields:
         :class:`StreamEvent`：``CONTEXT``（含引用）→ 若干 ``DELTA`` → ``DONE``。
@@ -226,23 +254,71 @@ async def stream_answer(
         if history_max_messages is None
         else history_max_messages
     )
-    masker = _new_masker()
+    masker = new_masker()
     masked_query = masker.mask(query)
-    trimmed = _mask_history(masker, _trim_history(list(history or []), limit))
+    trimmed = mask_history(masker, trim_history(list(history or []), limit))
+    # 长期记忆进模型前脱敏（历史脏数据兜底；本轮 token_map 可正常还原）
+    memory = masker.mask(memory) if memory else ""
     # 检索为同步阻塞调用（云端嵌入 HTTP + Milvus），放工作线程执行，避免阻塞事件循环
     hits, context_text = await asyncio.to_thread(
-        _retrieve_contexts, retriever, masked_query, tenant_id, kb_id
+        retrieve_contexts, retriever, masked_query, tenant_id, kb_id
     )
     if context_text:
         context_text = masker.mask(context_text)
     yield StreamEvent(kind=StreamKind.CONTEXT, contexts=hits)
 
+    # 工具链路（M4-4.1）：注册表内有可用工具时走「流式 + Function Calling」循环；
+    # 模型直接作答时首字延迟与无工具路径一致，仅在出现 tool_calls 时插入工具轮次。
+    # 还原用**单条**持久管道包住整条工具流：占位符被切在相邻片段（乃至跨工具轮次）
+    # 之间时也不会漏出半截（逐片段还原会破坏跨片段缓冲）。
+    if tool_executor is not None and tool_registry is not None and tool_registry.names():
+        messages = build_tool_messages(
+            system_prompt=_SYSTEM_PROMPT,
+            knowledge_text=context_text,
+            summary=summary,
+            memory=memory,
+            history=trimmed,
+            query=masked_query,
+        )
+        raw_stream = stream_tool_answer(
+            gateway=gateway,
+            messages=messages,
+            registry=tool_registry,
+            executor=tool_executor,
+            ctx=build_tool_context(tool_context, tenant_id=tenant_id, masker=masker),
+            max_rounds=tool_max_rounds,
+        )
+        async for delta in masker.restore_stream(raw_stream):
+            yield StreamEvent(kind=StreamKind.DELTA, delta=delta)
+        yield StreamEvent(kind=StreamKind.DONE)
+        return
+
     prompt = build_prompt(
-        {"query": masked_query, "history": trimmed, "context_text": context_text, "summary": summary}
+        {
+            "query": masked_query,
+            "history": trimmed,
+            "context_text": context_text,
+            "summary": summary,
+            "memory": memory,
+        }
     )
     async for delta in masker.restore_stream(gateway.stream(prompt)):
         yield StreamEvent(kind=StreamKind.DELTA, delta=delta)
     yield StreamEvent(kind=StreamKind.DONE)
+
+
+def build_tool_context(base: ToolContext | None, *, tenant_id: str, masker: PiiMasker) -> ToolContext:
+    """构造工具执行上下文：身份信息由服务端注入（模型无法指定租户），并挂上脱敏器供审计使用。"""
+    from app.agent.tools.spec import ToolContext as Context
+
+    context = base or Context()
+    return Context(
+        tenant_id=context.tenant_id or tenant_id,
+        session_id=context.session_id,
+        user_id=context.user_id,
+        message_id=context.message_id,
+        masker=masker,
+    )
 
 
 def create_agent(

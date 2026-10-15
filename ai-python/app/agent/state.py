@@ -66,6 +66,7 @@ class AgentState(TypedDict, total=False):
     kb_id: str | None  # 知识库标识（可选二级过滤）
     session_id: str  # 会话标识（供记忆与审计关联）
     history: list[ChatMessage]  # 近期对话（按时间升序；进模型前已被脱敏）
+    memory: str  # 跨会话用户长期记忆（用户级画像，M4-4.4；按 tenant+user 隔离）
 
     # ---- 中间产物 ----
     query_masked: str  # 脱敏后的用户问题（检索与提示词使用，避免 PII 进入模型）
@@ -74,6 +75,11 @@ class AgentState(TypedDict, total=False):
     contexts: list[RetrievalHit]  # 检索命中（供引用标注）
     context_text: str  # 拼装后的知识片段文本（已脱敏）
     prompt: str  # 最终送入 LLM 的提示词（便于审计与评测回放）
+    tool_context: Any  # 工具执行上下文（M4-4.8：编排路径按请求注入，勿进编译期闭包）
+
+    # ---- 编排观测（M4-4.8：覆盖语义，仅用于链路追踪与日志） ----
+    workflow_id: str  # 本轮执行的工作流标识（未走编排时为空）
+    workflow_version: int  # 本轮加载的工作流版本号（未走编排时为 0）
 
     # ---- 出参 ----
     answer: str  # 模型回答

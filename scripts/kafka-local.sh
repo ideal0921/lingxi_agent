@@ -24,8 +24,13 @@ export JAVA_HOME
 
 BOOTSTRAP="localhost:9092"
 # 流式全链路（M3-3.8）：会话消息 → AI 片段 → 最终回答；会话摘要回写（M3-3.11）
+# 工具链路（M4-4.3）：工具调用审计事件
 # 知识库链路（M3-3.2）：入库任务 → 入库结果回写 → 下线清理
+# 快捷回复链路（M4-4.6）：建议请求 → 建议异步结果（过载降级）
 TOPICS=("lingxi.session.message" "lingxi.ai.chunk" "lingxi.ai.reply" "lingxi.session.summary"
+        "lingxi.tool.audit"
+        "lingxi.ai.handoff" "lingxi.session.takeover"
+        "lingxi.ai.suggest.request" "lingxi.ai.suggest.result"
         "kb.doc.ingest" "kb.doc.indexed" "kb.doc.delete")
 PID_FILE="$KAFKA_DATA/kafka.pid"
 LOG_FILE="$KAFKA_DATA/kafka.log"

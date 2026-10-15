@@ -15,9 +15,14 @@ public class NoOpSessionEventPublisher implements SessionEventPublisher {
     private static final Logger log = LoggerFactory.getLogger(NoOpSessionEventPublisher.class);
 
     @Override
-    public void publishUserMessage(String sessionId, String tenantId, String messageId, long seq, String content,
-                                   String summary, List<SessionMessage> history) {
+    public void publishUserMessage(String sessionId, String tenantId, String userId, String messageId, long seq,
+                                   String content, String summary, List<SessionMessage> history) {
         log.debug("消息总线未启用，跳过用户消息事件发布 sessionId={} seq={} 历史条数={}",
                 sessionId, seq, history == null ? 0 : history.size());
+    }
+
+    @Override
+    public void publishTakeover(String sessionId, String reason, String agentId) {
+        log.debug("消息总线未启用，跳过接管事件发布 sessionId={} reason={}", sessionId, reason);
     }
 }

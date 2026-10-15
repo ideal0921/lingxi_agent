@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/lingxi/gateway-go/internal/client"
 	sessionv1 "github.com/lingxi/gateway-go/proto/sessionv1"
@@ -32,6 +33,18 @@ type sessionSummary struct {
 	CreatedAtMs  int64  `json:"created_at_ms"`
 	UpdatedAtMs  int64  `json:"updated_at_ms"`
 	MessageCount int32  `json:"message_count"`
+	Summary      string `json:"summary,omitempty"`
+}
+
+// suggestView 回复建议的 JSON 视图（M4-4.6 同步通道）。
+type suggestView struct {
+	RequestID     string   `json:"request_id"`
+	Ok            bool     `json:"ok"`
+	Degraded      bool     `json:"degraded"`
+	DegradeReason string   `json:"degrade_reason"`
+	Queued        bool     `json:"queued"`
+	Suggestions   []string `json:"suggestions"`
+	ElapsedMs     int64    `json:"elapsed_ms"`
 }
 
 // ticketView 工单的 JSON 视图。
@@ -100,6 +113,35 @@ func (h *AgentHandler) ListAgentSessions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"sessions": toSessionSummaries(sessions)})
+}
+
+// SuggestReply 快捷回复：调 Java 同步通道取 1~3 条候选草稿，供坐席选择/编辑后再发送。
+// 过载降级（degraded+queued）时结果稍后经 Kafka 由坐席端 WSS 推送。
+// request_id 由 Go 生成（uuid）并透传三端，用于同步/异步结果去重。
+// 路由：POST /api/v1/agent/suggest {session_id, agent_id, intent?, max_suggestions?}
+func (h *AgentHandler) SuggestReply(c *gin.Context) {
+	var req struct {
+		SessionID      string `json:"session_id"`
+		AgentID        string `json:"agent_id"`
+		Intent         string `json:"intent"`
+		MaxSuggestions int32  `json:"max_suggestions"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.SessionID == "" || req.AgentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id 与 agent_id 不能为空"})
+		return
+	}
+	resp, err := h.session.SuggestReplies(c.Request.Context(), &sessionv1.SuggestRepliesRequest{
+		RequestId:      uuid.NewString(),
+		SessionId:      req.SessionID,
+		AgentId:        req.AgentID,
+		Intent:         req.Intent,
+		MaxSuggestions: req.MaxSuggestions,
+	})
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取回复建议失败"})
+		return
+	}
+	c.JSON(http.StatusOK, toSuggestView(resp))
 }
 
 // CreateTicket 一键建单。
@@ -188,10 +230,23 @@ func toSessionSummaries(in []*sessionv1.SessionSummary) []sessionSummary {
 		out = append(out, sessionSummary{
 			SessionID: s.SessionId, UserID: s.UserId, State: s.State.String(),
 			AgentID: s.AgentId, CreatedAtMs: s.CreatedAtMs,
-			UpdatedAtMs: s.UpdatedAtMs, MessageCount: s.MessageCount,
+			UpdatedAtMs: s.UpdatedAtMs, MessageCount: s.MessageCount, Summary: s.Summary,
 		})
 	}
 	return out
+}
+
+// toSuggestView proto 建议响应 → JSON 视图（纯函数，便于单测）。
+func toSuggestView(resp *sessionv1.SuggestRepliesResponse) suggestView {
+	return suggestView{
+		RequestID:     resp.RequestId,
+		Ok:            resp.Ok,
+		Degraded:      resp.Degraded,
+		DegradeReason: resp.DegradeReason,
+		Queued:        resp.Queued,
+		Suggestions:   resp.Suggestions,
+		ElapsedMs:     resp.ElapsedMs,
+	}
 }
 
 // toTicketView proto 工单 → JSON 视图。

@@ -35,6 +35,13 @@ func main() {
 	}
 	defer func() { _ = ticketClient.Close() }()
 
+	// 编排域 gRPC 客户端（Java 业务域，共用地址；M4-4.7 Studio 工作流编排）。
+	workflowClient, err := client.NewWorkflowService(cfg.SessionServiceAddr)
+	if err != nil {
+		log.Fatalf("连接编排域失败: %v", err)
+	}
+	defer func() { _ = workflowClient.Close() }()
+
 	router := gin.New()
 	router.Use(gin.Recovery(), middleware.AccessLog())
 
@@ -44,12 +51,17 @@ func main() {
 	router.GET("/ws", wsHandler.ServeWS)
 
 	// AI 流式片段消费（M3-3.8）：消费 Kafka chunk 事件并广播至会话连接。
+	// 快捷回复建议异步结果消费（M4-4.6）：过载降级后仅推送至该会话的坐席端连接。
 	// 停机由 defer cancel 触发消费者正常退出（FetchMessage 返回 ctx 取消）。
 	if cfg.KafkaEnabled {
-		consumer := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaChunkTopic, cfg.KafkaGroupID, hub)
 		consumeCtx, cancelConsume := context.WithCancel(context.Background())
 		defer cancelConsume()
+
+		consumer := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaChunkTopic, cfg.KafkaGroupID, hub)
 		go consumer.Run(consumeCtx)
+
+		suggestConsumer := kafka.NewSuggestConsumer(cfg.KafkaBrokers, cfg.KafkaSuggestTopic, cfg.KafkaGroupID, hub)
+		go suggestConsumer.Run(consumeCtx)
 	}
 
 	api := router.Group("/api/v1")
@@ -65,12 +77,27 @@ func main() {
 
 	// 客服工作台接口（M2-B）：队列/接管/会话列表/工单。
 	agentHandler := handler.NewAgentHandler(sessionClient, ticketClient)
+	// 快捷回复建议（M4-4.6）：同步取候选草稿，过载时转异步经坐席端 WSS 推送。
+	api.POST("/agent/suggest", agentHandler.SuggestReply)
 	api.GET("/agent/queue", agentHandler.ListQueue)
 	api.POST("/agent/takeover", agentHandler.TakeOver)
 	api.GET("/agent/sessions", agentHandler.ListAgentSessions)
 	api.POST("/agent/tickets", agentHandler.CreateTicket)
 	api.GET("/agent/tickets", agentHandler.ListTickets)
 	api.POST("/agent/tickets/:ticket_id/status", agentHandler.UpdateTicketStatus)
+
+	// 编排 Studio 接口（M4-4.7）：工作流 CRUD / 草稿 / 发布 / 版本与回滚。
+	studioHandler := handler.NewStudioHandler(workflowClient)
+	api.GET("/studio/workflows", studioHandler.ListWorkflows)
+	api.POST("/studio/workflows", studioHandler.CreateWorkflow)
+	api.GET("/studio/workflows/:workflow_id", studioHandler.GetWorkflow)
+	api.PUT("/studio/workflows/:workflow_id/draft", studioHandler.SaveDraft)
+	api.POST("/studio/workflows/:workflow_id/publish", studioHandler.PublishWorkflow)
+	api.POST("/studio/workflows/:workflow_id/rollout", studioHandler.SetRollout)
+	api.GET("/studio/workflows/:workflow_id/versions", studioHandler.ListVersions)
+	api.GET("/studio/workflows/:workflow_id/versions/:version", studioHandler.GetVersion)
+	api.POST("/studio/workflows/:workflow_id/versions/:version/rollback", studioHandler.RollbackVersion)
+	api.DELETE("/studio/workflows/:workflow_id", studioHandler.DeleteWorkflow)
 
 	srv := &http.Server{
 		Addr:              cfg.Port,

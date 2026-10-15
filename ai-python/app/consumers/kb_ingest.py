@@ -214,6 +214,8 @@ async def run_kb_ingest_consumer(
         bootstrap_servers=config.kafka_bootstrap_servers,
         handler=_handler,
         settle=settle,
+        max_poll_interval_ms=config.kafka_max_poll_interval_ms,
+        restart_backoff_seconds=config.kafka_consumer_restart_backoff_seconds,
     )
 
 
@@ -246,4 +248,6 @@ async def run_kb_delete_consumer(*, config: Settings, store: Any, settle: Any = 
         bootstrap_servers=config.kafka_bootstrap_servers,
         handler=_handler,
         settle=settle,
+        max_poll_interval_ms=config.kafka_max_poll_interval_ms,
+        restart_backoff_seconds=config.kafka_consumer_restart_backoff_seconds,
     )

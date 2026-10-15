@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.lingxi</groupId>
+        <artifactId>lingxi-core</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>lingxi-business</artifactId>
+    <name>lingxi-business</name>
+    <description>业务工具域：订单/物流查询与退换货受理，gRPC 契约 lingxi.business.v1（M4-4.2）</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- gRPC 契约（BusinessToolService）：由 contracts/proto/business.proto 生成 -->
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-gateway-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

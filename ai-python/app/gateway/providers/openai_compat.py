@@ -9,10 +9,11 @@
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
-from app.gateway.providers.base import BaseProvider
+from app.gateway.providers.base import BaseProvider, ProviderStreamEvent, ToolCallRequest
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,11 @@ logger = logging.getLogger(__name__)
 _SSE_DATA_PREFIX = "data:"
 # 流结束标记
 _SSE_DONE = "[DONE]"
+# 模型以工具调用结束本轮的 finish_reason
+_FINISH_TOOL_CALLS = "tool_calls"
+# stream_events 签名不含超时入参，沿用 stream_chat 的默认值（与既有语义一致）
+_DEFAULT_TIMEOUT = 30.0
+_DEFAULT_FIRST_TOKEN_TIMEOUT = 10.0
 
 
 class _StreamEnd:
@@ -29,6 +35,39 @@ class _StreamEnd:
 _STREAM_END = _StreamEnd()
 
 
+class _ToolCallAccumulator:
+    """按 ``index`` 累积单个工具调用的增量分片。
+
+    OpenAI 兼容协议下，``tool_calls`` 是**增量分片**：首个 chunk 通常携带 ``id`` 与
+    ``function.name``，后续 chunk 只逐段下发 ``function.arguments``，且多个工具调用
+    会以 ``index`` 交错出现。故按 index 分别缓存并按到达顺序拼接。
+    """
+
+    __slots__ = ("argument_parts", "id", "name")
+
+    def __init__(self) -> None:
+        self.id = ""
+        self.name = ""
+        self.argument_parts: list[str] = []
+
+    def merge(self, fragment: dict) -> None:
+        # id 稳定且只下发一次：以首次出现为准，避免重复分片污染标识
+        if fragment.get("id") and not self.id:
+            self.id = fragment["id"]
+        function = fragment.get("function")
+        if not isinstance(function, dict):
+            return
+        # name / arguments 允许跨 chunk 拆分，统一用拼接兼容两种下发方式
+        if function.get("name"):
+            self.name += function["name"]
+        arguments = function.get("arguments")
+        if arguments:
+            self.argument_parts.append(arguments)
+
+    def build(self) -> ToolCallRequest:
+        return ToolCallRequest(id=self.id, name=self.name, arguments="".join(self.argument_parts))
+
+
 class OpenAICompatibleProvider(BaseProvider):
     """OpenAI 兼容协议 Provider 通用实现。
 
@@ -36,12 +75,15 @@ class OpenAICompatibleProvider(BaseProvider):
     ``api_key`` 时 :attr:`configured` 为 ``False``，由网关工厂跳过、不纳入降级链。
     """
 
-    def __init__(self, name: str, api_key: str, base_url: str, model: str) -> None:
+    def __init__(
+        self, name: str, api_key: str, base_url: str, model: str, *, transport: Any = None
+    ) -> None:
         self.name = name
         self._api_key = api_key
         # 去掉末尾斜杠，统一以 f"{base_url}/chat/completions" 拼接
         self._base_url = base_url.rstrip("/")
         self._default_model = model
+        self._transport = transport  # 仅测试注入（httpx.MockTransport），生产为 None
 
     @property
     def configured(self) -> bool:
@@ -73,7 +115,7 @@ class OpenAICompatibleProvider(BaseProvider):
 
     async def chat(self, prompt: str, model: str | None = None, timeout: float = 30.0) -> str:
         url = f"{self._base_url}/chat/completions"
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
             resp = await client.post(url, headers=self._headers(), json=self._payload(prompt, model, False))
             resp.raise_for_status()
             data = resp.json()
@@ -95,11 +137,8 @@ class OpenAICompatibleProvider(BaseProvider):
         """
         url = f"{self._base_url}/chat/completions"
         payload = self._payload(prompt, model, True)
-        read_timeout = httpx.Timeout(
-            connect=first_token_timeout, read=timeout, write=timeout, pool=first_token_timeout
-        )
         async with (
-            httpx.AsyncClient(timeout=read_timeout) as client,
+            self._stream_client(timeout, first_token_timeout) as client,
             client.stream("POST", url, headers=self._headers(stream=True), json=payload) as resp,
         ):
             resp.raise_for_status()
@@ -110,29 +149,135 @@ class OpenAICompatibleProvider(BaseProvider):
                 if delta:
                     yield delta
 
-    @staticmethod
-    def _parse_sse_line(line: str) -> str | None | _StreamEnd:
-        """解析单行 SSE。
+    async def stream_events(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        model: str | None = None,
+    ) -> AsyncIterator[ProviderStreamEvent]:
+        """原生流式事件：解析文本增量与 ``tool_calls`` 分片，支持 Function Calling。
 
-        Returns:
-            文本片段；无内容返回 ``None``；遇 ``[DONE]`` 返回 :data:`_STREAM_END`。
+        ``tools`` 非空时在请求体携带工具定义；SSE 中的 ``delta.content`` 产出文本
+        事件，``delta.tool_calls`` **按 index 增量累积**，在 ``finish_reason ==
+        "tool_calls"`` 或流结束时整体产出 ``tool_call`` 事件；``[DONE]`` / 流结束
+        产出终止事件。非法行沿用宽松解析，跳过不中断。
         """
+        url = f"{self._base_url}/chat/completions"
+        payload = self._events_payload(messages, model, tools)
+        pending: dict[int, _ToolCallAccumulator] = {}
+        async with (
+            self._stream_client(_DEFAULT_TIMEOUT, _DEFAULT_FIRST_TOKEN_TIMEOUT) as client,
+            client.stream("POST", url, headers=self._headers(stream=True), json=payload) as resp,
+        ):
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                data = self._sse_data(line)
+                if data is None:
+                    continue
+                if data == _SSE_DONE:
+                    break
+                choice = self._first_choice(data)
+                if choice is None:
+                    continue
+                delta = choice.get("delta")
+                if isinstance(delta, dict):
+                    content = delta.get("content")
+                    if content:
+                        yield ProviderStreamEvent(delta=content)
+                    self._merge_tool_calls(pending, delta.get("tool_calls"))
+                if choice.get("finish_reason") == _FINISH_TOOL_CALLS:
+                    for call in self._drain_tool_calls(pending):
+                        yield ProviderStreamEvent(tool_call=call)
+        # 流自然结束（未收到 finish_reason 或 [DONE]）：补齐残留工具调用后终止
+        for call in self._drain_tool_calls(pending):
+            yield ProviderStreamEvent(tool_call=call)
+        yield ProviderStreamEvent()
+
+    def _events_payload(self, messages: list[dict], model: str | None, tools: list[dict] | None) -> dict:
+        payload: dict = {
+            "model": model or self._default_model,
+            "messages": messages,
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = tools
+        return payload
+
+    def _stream_client(self, timeout: float, first_token_timeout: float) -> httpx.AsyncClient:
+        """构造带超时策略的流式客户端（``transport`` 可注入，便于离线测试）。
+
+        超时策略：``connect`` 用 ``first_token_timeout`` 兜住首字前建连；``read`` 用
+        ``timeout`` 兜住整体与片段间隔。
+        """
+        timeout_config = httpx.Timeout(
+            connect=first_token_timeout, read=timeout, write=timeout, pool=first_token_timeout
+        )
+        return httpx.AsyncClient(timeout=timeout_config, transport=self._transport)
+
+    @staticmethod
+    def _merge_tool_calls(pending: dict[int, _ToolCallAccumulator], fragments: object) -> None:
+        """把一批 ``delta.tool_calls`` 分片合并进对应的 index 累积器。"""
+        if not isinstance(fragments, list):
+            return
+        for fragment in fragments:
+            if not isinstance(fragment, dict):
+                continue
+            index = fragment.get("index", 0)
+            if not isinstance(index, int):
+                continue
+            accumulator = pending.get(index)
+            if accumulator is None:
+                accumulator = _ToolCallAccumulator()
+                pending[index] = accumulator
+            accumulator.merge(fragment)
+
+    @staticmethod
+    def _drain_tool_calls(pending: dict[int, _ToolCallAccumulator]) -> list[ToolCallRequest]:
+        """按 index 顺序产出并清空累积完成的工具调用。"""
+        calls = [pending[index].build() for index in sorted(pending)]
+        pending.clear()
+        return calls
+
+    @staticmethod
+    def _sse_data(line: str) -> str | None:
+        """剥离 ``data:`` 前缀返回 JSON 文本；非数据行返回 ``None``。"""
         stripped = line.strip()
         if not stripped.startswith(_SSE_DATA_PREFIX):
             return None
-        data = stripped[len(_SSE_DATA_PREFIX) :].strip()
-        if data == _SSE_DONE:
-            return _STREAM_END
+        return stripped[len(_SSE_DATA_PREFIX) :].strip()
+
+    @staticmethod
+    def _first_choice(data: str) -> dict | None:
+        """解析 SSE 数据行并取首个 choice；非法行或空 choices 返回 ``None``。"""
         try:
             obj = json.loads(data)
         except json.JSONDecodeError:
             logger.debug("跳过非法 SSE 数据行: %s", data[:80])
             return None
-        choices = obj.get("choices") or []
-        if not choices:
+        if not isinstance(obj, dict):
             return None
-        delta = choices[0].get("delta") or {}
-        content = delta.get("content")
+        choices = obj.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            return None
+        return choices[0]
+
+    @staticmethod
+    def _parse_sse_line(line: str) -> str | None | _StreamEnd:
+        """解析单行 SSE 的文本内容（``chat`` 通道沿用）。
+
+        Returns:
+            文本片段；无内容返回 ``None``；遇 ``[DONE]`` 返回 :data:`_STREAM_END`。
+        """
+        data = OpenAICompatibleProvider._sse_data(line)
+        if data is None:
+            return None
+        if data == _SSE_DONE:
+            return _STREAM_END
+        choice = OpenAICompatibleProvider._first_choice(data)
+        if choice is None:
+            return None
+        delta = choice.get("delta")
+        content = delta.get("content") if isinstance(delta, dict) else None
         return content if content else None
 
     def _log_usage(self, usage: dict | None) -> None:

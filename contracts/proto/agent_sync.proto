@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// 坐席快捷回复同步契约（M4-4.6）：由 **Python** 实现服务端，**Java** 通过 gRPC 同步调用。
+//
+// 语义：Java 组装会话上下文（摘要 + 近 N 轮）后同步请求 AI 生成 1~3 条回复建议草稿，
+// 供坐席在工作台选择/编辑后再发送；AI **不直接对客发送**。
+//
+// 降级约定：并发闸门已满或生成超时时，服务端以 **gRPC OK + degraded=true** 返回
+// （而非错误状态），便于调用方区分「过载」与「故障」并据此回落异步链路。
+package lingxi.agentsync.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto/agentsyncv1";
+
+// 一轮对话（供上下文注入；已由调用方完成 PII 脱敏）
+message ChatTurn {
+  string role = 1;    // user / agent
+  string content = 2;
+}
+
+// 生成回复建议请求
+message GenerateSuggestRequest {
+  string request_id = 1;      // 三端贯穿的请求标识（结果去重与链路追踪）
+  string tenant_id = 2;
+  string session_id = 3;
+  string agent_id = 4;
+  string intent = 5;          // 坐席意图/要点（可选）
+  string summary = 6;         // 会话摘要（可选）
+  repeated ChatTurn history = 7; // 近 N 轮上下文（升序）
+  int32 max_suggestions = 8;  // 候选条数上限（0 用服务端默认）
+}
+
+// 生成回复建议响应
+message GenerateSuggestResponse {
+  bool ok = 1;
+  repeated string suggestions = 2;
+  bool degraded = 3;          // 是否降级（BUSY / TIMEOUT）
+  string degrade_reason = 4;  // BUSY / TIMEOUT
+  int64 elapsed_ms = 5;
+}
+
+// 同步生成服务：由 Python 实现
+service AgentSyncService {
+  rpc SuggestReplies(GenerateSuggestRequest) returns (GenerateSuggestResponse);
+}

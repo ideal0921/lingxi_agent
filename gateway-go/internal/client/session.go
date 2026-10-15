@@ -83,6 +83,14 @@ func (s *SessionService) TakeOver(sessionID, agentID string) (*sessionv1.TakeOve
 	return s.client.TakeOver(ctx, &sessionv1.TakeOverRequest{SessionId: sessionID, AgentId: agentID})
 }
 
+// SuggestReplies 快捷回复建议（坐席工作台触发，同步通道）。
+// 过载时 Java 侧可能返回 degraded=true, queued=true，结果稍后经 Kafka 异步推送。
+func (s *SessionService) SuggestReplies(ctx context.Context, req *sessionv1.SuggestRepliesRequest) (*sessionv1.SuggestRepliesResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return s.client.SuggestReplies(ctx, req)
+}
+
 // ListAgentSessions 指定坐席的会话列表。
 func (s *SessionService) ListAgentSessions(agentID string) ([]*sessionv1.SessionSummary, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

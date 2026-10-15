@@ -29,6 +29,7 @@ const (
 	SessionService_ListWaitingSessions_FullMethodName = "/lingxi.session.v1.SessionService/ListWaitingSessions"
 	SessionService_TakeOver_FullMethodName            = "/lingxi.session.v1.SessionService/TakeOver"
 	SessionService_ListAgentSessions_FullMethodName   = "/lingxi.session.v1.SessionService/ListAgentSessions"
+	SessionService_SuggestReplies_FullMethodName      = "/lingxi.session.v1.SessionService/SuggestReplies"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -44,6 +45,7 @@ type SessionServiceClient interface {
 	ListWaitingSessions(ctx context.Context, in *ListWaitingSessionsRequest, opts ...grpc.CallOption) (*ListWaitingSessionsResponse, error)
 	TakeOver(ctx context.Context, in *TakeOverRequest, opts ...grpc.CallOption) (*TakeOverResponse, error)
 	ListAgentSessions(ctx context.Context, in *ListAgentSessionsRequest, opts ...grpc.CallOption) (*ListAgentSessionsResponse, error)
+	SuggestReplies(ctx context.Context, in *SuggestRepliesRequest, opts ...grpc.CallOption) (*SuggestRepliesResponse, error)
 }
 
 type sessionServiceClient struct {
@@ -124,6 +126,16 @@ func (c *sessionServiceClient) ListAgentSessions(ctx context.Context, in *ListAg
 	return out, nil
 }
 
+func (c *sessionServiceClient) SuggestReplies(ctx context.Context, in *SuggestRepliesRequest, opts ...grpc.CallOption) (*SuggestRepliesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SuggestRepliesResponse)
+	err := c.cc.Invoke(ctx, SessionService_SuggestReplies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SessionServiceServer is the server API for SessionService service.
 // All implementations must embed UnimplementedSessionServiceServer
 // for forward compatibility.
@@ -137,6 +149,7 @@ type SessionServiceServer interface {
 	ListWaitingSessions(context.Context, *ListWaitingSessionsRequest) (*ListWaitingSessionsResponse, error)
 	TakeOver(context.Context, *TakeOverRequest) (*TakeOverResponse, error)
 	ListAgentSessions(context.Context, *ListAgentSessionsRequest) (*ListAgentSessionsResponse, error)
+	SuggestReplies(context.Context, *SuggestRepliesRequest) (*SuggestRepliesResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
 }
 
@@ -167,6 +180,9 @@ func (UnimplementedSessionServiceServer) TakeOver(context.Context, *TakeOverRequ
 }
 func (UnimplementedSessionServiceServer) ListAgentSessions(context.Context, *ListAgentSessionsRequest) (*ListAgentSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAgentSessions not implemented")
+}
+func (UnimplementedSessionServiceServer) SuggestReplies(context.Context, *SuggestRepliesRequest) (*SuggestRepliesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SuggestReplies not implemented")
 }
 func (UnimplementedSessionServiceServer) mustEmbedUnimplementedSessionServiceServer() {}
 func (UnimplementedSessionServiceServer) testEmbeddedByValue()                        {}
@@ -315,6 +331,24 @@ func _SessionService_ListAgentSessions_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_SuggestReplies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SuggestRepliesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).SuggestReplies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_SuggestReplies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).SuggestReplies(ctx, req.(*SuggestRepliesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SessionService_ServiceDesc is the grpc.ServiceDesc for SessionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -349,6 +383,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAgentSessions",
 			Handler:    _SessionService_ListAgentSessions_Handler,
+		},
+		{
+			MethodName: "SuggestReplies",
+			Handler:    _SessionService_SuggestReplies_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

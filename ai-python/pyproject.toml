@@ -25,6 +25,12 @@ dependencies = [
     "langgraph>=1.2.0,<2.0.0",
     # 事件总线（M3-3.8 流式全链路：消费会话消息、生产流式片段）
     "aiokafka>=0.11.0",
+    # 工具参数强校验（M4-4.1：JSON Schema，非法参数在调用前被拒）
+    "jsonschema>=4.21.0",
+    # 业务工具同步通道（M4-4.2：AI 域经 gRPC 调用 Java 业务域）
+    "grpcio>=1.60",
+    # 跨会话长期记忆（M4-4.4：用户级画像摘要存 Redis，异步客户端）
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -32,7 +38,6 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
-    "grpcio>=1.60",
     "grpcio-tools>=1.60",
     "reportlab>=4.0",  # 仅测试用：生成 PDF 样本验证解析链路
 ]

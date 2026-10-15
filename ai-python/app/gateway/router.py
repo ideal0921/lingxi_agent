@@ -22,7 +22,7 @@ from app.gateway.providers import (
     OpenAICompatibleProvider,
     QwenProvider,
 )
-from app.gateway.providers.base import BaseProvider
+from app.gateway.providers.base import BaseProvider, ProviderStreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,52 @@ class LLMGateway:
                     if emitted:
                         # 已产出片段，无法安全降级（会重复半截内容），结束本轮流
                         logger.error("流式中断于 provider=%s，已产出内容不回滚", provider.name)
+                        return
+        raise RuntimeError(f"全部模型流式调用失败: {last_error}") from last_error
+
+    async def stream_events(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        model: str | None = None,
+    ) -> AsyncIterator[ProviderStreamEvent]:
+        """流式事件生成：按降级链轮询 Provider，逐事件产出（文本增量 / 工具调用）。
+
+        降级策略与 :meth:`stream` 一致：等待**首个有效事件**（非空 delta 或 tool_call）
+        时施加 ``first_token_timeout``，超时视为该 Provider 失败并切换下一个；
+        一旦已产出任何 delta/tool_call 便不再降级，避免半截内容重复。
+        """
+        last_error: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            if attempt > 0:
+                await asyncio.sleep(self._backoff_delay(attempt))
+            for provider in self._providers:
+                emitted = False
+                try:
+                    async with aclosing(
+                        provider.stream_events(messages, tools=tools, model=model)
+                    ) as stream:
+                        while True:
+                            try:
+                                if emitted:
+                                    event = await anext(stream)
+                                else:
+                                    async with asyncio.timeout(self._first_token_timeout):
+                                        event = await anext(stream)
+                            except StopAsyncIteration:
+                                return
+                            # 空事件为终止信号，不视为有效产出（不阻断后续正常结束）
+                            if event.delta or event.tool_call is not None:
+                                emitted = True
+                            yield event
+                except Exception as exc:  # noqa: BLE001 - 宏观降级判定
+                    last_error = exc
+                    logger.warning(
+                        "LLM 流式事件 provider=%s 失败(第%d次): %s", provider.name, attempt + 1, exc
+                    )
+                    if emitted:
+                        # 已产出事件，无法安全降级（会重复半截内容），结束本轮流
+                        logger.error("流式事件中断于 provider=%s，已产出内容不回滚", provider.name)
                         return
         raise RuntimeError(f"全部模型流式调用失败: {last_error}") from last_error
 

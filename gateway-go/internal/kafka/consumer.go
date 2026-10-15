@@ -17,12 +17,14 @@ import (
 
 // ChunkEvent 对应 Python 侧 lingxi.ai.chunk 消息体（契约见 ai-python/app/consumers/session_message.py）。
 type ChunkEvent struct {
-	SessionID string `json:"session_id"`
-	MessageID string `json:"message_id"`
-	Index     int    `json:"index"`
-	Delta     string `json:"delta"`
-	Finished  bool   `json:"finished"`
-	Error     string `json:"error,omitempty"`
+	SessionID   string `json:"session_id"`
+	MessageID   string `json:"message_id"`
+	Index       int    `json:"index"`
+	Delta       string `json:"delta"`
+	Finished    bool   `json:"finished"`
+	Interrupted bool   `json:"interrupted"`
+	Reason      string `json:"reason,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Broadcaster 向指定会话的全部连接广播下行信封（由 ws.Hub 实现）。
@@ -42,14 +44,16 @@ func DecodeChunk(data []byte) (*ChunkEvent, error) {
 // ToEnvelope 片段事件 → 网关下行信封（纯函数，便于单测）。
 func ToEnvelope(event *ChunkEvent) *ws.Envelope {
 	return &ws.Envelope{
-		Type:      ws.MsgTypeChunk,
-		SessionID: event.SessionID,
-		Sender:    "agent",
-		Content:   event.Delta,
-		MessageID: event.MessageID,
-		Index:     event.Index,
-		Finished:  event.Finished,
-		Error:     event.Error,
+		Type:        ws.MsgTypeChunk,
+		SessionID:   event.SessionID,
+		Sender:      "agent",
+		Content:     event.Delta,
+		MessageID:   event.MessageID,
+		Index:       event.Index,
+		Finished:    event.Finished,
+		Interrupted: event.Interrupted,
+		Reason:      event.Reason,
+		Error:       event.Error,
 	}
 }
 

@@ -17,6 +17,7 @@
         >
           <div class="session-title">{{ s.user_id }}</div>
           <div class="session-meta">{{ shortId(s.session_id) }} · {{ s.message_count }} 条</div>
+          <div v-if="s.summary" class="session-summary">{{ s.summary }}</div>
         </div>
       </n-card>
 
@@ -34,6 +35,7 @@
         >
           <div class="session-title">{{ s.user_id }}</div>
           <div class="session-meta">{{ shortId(s.session_id) }} · {{ s.message_count }} 条</div>
+          <div v-if="s.summary" class="session-summary">{{ s.summary }}</div>
         </div>
       </n-card>
     </aside>
@@ -76,6 +78,32 @@
               <div class="bubble">{{ msg.content }}</div>
               <div class="meta">{{ senderLabel(msg.sender) }} · {{ msg.seq || '…' }}</div>
             </div>
+          </div>
+          <!-- 快捷回复（M4-4.6）：调 Java 生成候选草稿，坐席选择/编辑后再发送（AI 不直接对客） -->
+          <div class="suggest-bar">
+            <n-space :size="8" align="center">
+              <n-button
+                size="tiny"
+                type="primary"
+                ghost
+                :loading="suggesting"
+                :disabled="!selected"
+                @click="requestSuggest()"
+              >
+                快捷回复
+              </n-button>
+              <span v-if="suggestNotice" class="suggest-notice">{{ suggestNotice }}</span>
+            </n-space>
+            <n-space v-if="suggestions.length" vertical :size="6" class="suggest-list">
+              <div
+                v-for="(s, i) in suggestions"
+                :key="i"
+                class="suggest-card"
+                @click="applySuggestion(s)"
+              >
+                {{ s }}
+              </div>
+            </n-space>
           </div>
           <n-space align="center" class="reply-bar">
             <n-input
@@ -176,15 +204,20 @@ const {
   tickets,
   wsStatus,
   error,
+  draft,
+  suggestions,
+  suggesting,
+  suggestNotice,
   init,
   takeOverSession,
   selectSession,
   sendReply,
+  requestSuggest,
+  applySuggestion,
   createTicketForSession,
   transitionTicket,
 } = useWorkbench()
 
-const draft = ref('')
 const ticketTitle = ref('')
 const ticketDesc = ref('')
 const listEl = ref<HTMLElement | null>(null)
@@ -196,6 +229,7 @@ function stateLabel(state: string): string {
   const map: Record<string, string> = {
     INIT: '待接管',
     AI_ACTIVE: 'AI应答中',
+    WAITING_HUMAN: '待人工接入',
     HUMAN_CHAT: '人工中',
     CLOSED: '已关闭',
   }
@@ -205,12 +239,13 @@ function stateLabel(state: string): string {
 function stateTagType(state: string): 'default' | 'success' | 'warning' {
   if (state === 'HUMAN_CHAT') return 'success'
   if (state === 'CLOSED') return 'default'
+  // WAITING_HUMAN（待人工接入）与其余待处理状态同为 warning 提示
   return 'warning'
 }
 
-/** 是否可人工接管：待接入（INIT）与 AI 应答中（AI_ACTIVE）均可（M3-3.11）。 */
+/** 是否可人工接管：待接入（INIT）、AI 应答中（AI_ACTIVE）与待人工接入（WAITING_HUMAN）均可。 */
 function canTakeOver(state: string): boolean {
-  return state === 'INIT' || state === 'AI_ACTIVE'
+  return state === 'INIT' || state === 'AI_ACTIVE' || state === 'WAITING_HUMAN'
 }
 
 function ticketTagType(status: TicketStatus): 'info' | 'warning' | 'success' {
@@ -323,6 +358,16 @@ function scrollToBottom(): void {
   margin-top: 2px;
 }
 
+/* 会话摘要预览：单行截断，空值不渲染（由模板 v-if 控制） */
+.session-summary {
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-list {
   height: calc(100vh - 240px);
   min-height: 260px;
@@ -372,6 +417,36 @@ function scrollToBottom(): void {
 
 .reply-bar {
   margin-top: 10px;
+}
+
+/* 快捷回复：候选卡片与降级提示（M4-4.6） */
+.suggest-bar {
+  margin-top: 10px;
+}
+
+.suggest-notice {
+  font-size: 12px;
+  color: #d03050;
+}
+
+.suggest-list {
+  margin-top: 6px;
+}
+
+.suggest-card {
+  padding: 6px 10px;
+  font-size: 13px;
+  background: #f0f7ff;
+  border: 1px solid #cfe3fb;
+  border-radius: 6px;
+  cursor: pointer;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.suggest-card:hover {
+  background: #e1efff;
+  border-color: #2b6cb0;
 }
 
 .ticket-item {

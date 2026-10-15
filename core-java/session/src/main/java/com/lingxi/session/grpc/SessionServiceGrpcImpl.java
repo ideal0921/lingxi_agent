@@ -2,12 +2,15 @@ package com.lingxi.session.grpc;
 
 import java.util.EnumSet;
 import java.util.List;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.lingxi.session.ai.SuggestReplyCoordinator;
+import com.lingxi.session.ai.SuggestResult;
 import com.lingxi.session.event.SessionEventPublisher;
 import com.lingxi.session.model.Session;
 import com.lingxi.session.model.SessionMessage;
@@ -35,12 +38,20 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
     private final SessionEventPublisher eventPublisher;
     /** 随事件带给 AI 域的「近 N 轮」消息条数上限（M3-3.11 上下文窗口）。 */
     private final int historyLimit;
+    /** 客服队列下发摘要预览的截断长度（M4-4.5 摘要移交），避免列表 payload 膨胀。 */
+    private final int summaryPreviewLen;
+    /** 坐席快捷回复协调器（M4-4.6）：组装上下文并同步调 AI 生成候选。 */
+    private final SuggestReplyCoordinator suggestCoordinator;
 
     public SessionServiceGrpcImpl(SessionRepository repository, SessionEventPublisher eventPublisher,
-                                  @Value("${lingxi.session.history-limit:20}") int historyLimit) {
+                                  @Value("${lingxi.session.history-limit:20}") int historyLimit,
+                                  @Value("${lingxi.session.summary-preview-len:200}") int summaryPreviewLen,
+                                  SuggestReplyCoordinator suggestCoordinator) {
         this.repository = repository;
         this.eventPublisher = eventPublisher;
         this.historyLimit = historyLimit;
+        this.summaryPreviewLen = summaryPreviewLen;
+        this.suggestCoordinator = suggestCoordinator;
     }
 
     @Override
@@ -94,8 +105,8 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
                 repository.save(session);
                 log.info("会话 {} 进入 AI_ACTIVE", session.getId());
             }
-            eventPublisher.publishUserMessage(session.getId(), session.getTenantId(), saved.messageId(),
-                    saved.seq(), saved.content(), session.getSummary(), history);
+            eventPublisher.publishUserMessage(session.getId(), session.getTenantId(), session.getUserId(),
+                    saved.messageId(), saved.seq(), saved.content(), session.getSummary(), history);
         }
 
         observer.onNext(lingxi.session.v1.Session.SendMessageResponse.newBuilder()
@@ -129,6 +140,10 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
                     .setCurrentState(toProtoState(session.getState()))
                     .build());
             observer.onCompleted();
+            // M4-4.5：成功迁移到 HUMAN_CHAT 时通知 AI 域终止正在生成的回答
+            if (target == SessionStateMachine.State.HUMAN_CHAT) {
+                eventPublisher.publishTakeover(session.getId(), "state_change", request.getOperator());
+            }
         } catch (IllegalStateTransitionException e) {
             log.warn("非法状态迁移被拒绝 sessionId={} {} -> {}", session.getId(),
                     session.getState(), target);
@@ -184,10 +199,12 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
     public void listWaitingSessions(lingxi.session.v1.Session.ListWaitingSessionsRequest request,
                                     StreamObserver<lingxi.session.v1.Session.ListWaitingSessionsResponse> observer) {
         int limit = request.getLimit() > 0 ? Math.min(request.getLimit(), 50) : 20;
-        // M3-3.11：INIT（待接入）与 AI_ACTIVE（AI 应答中）都可人工介入，均入客服队列
+        // M3-3.11：INIT（待接入）与 AI_ACTIVE（AI 应答中）都可人工介入，均入客服队列；
+        // M4-4.5：WAITING_HUMAN（AI 请求转人工）仍在队列等待接入
         List<lingxi.session.v1.Session.SessionSummary> summaries =
                 repository.listByStates(EnumSet.of(
-                                SessionStateMachine.State.INIT, SessionStateMachine.State.AI_ACTIVE)).stream()
+                                SessionStateMachine.State.INIT, SessionStateMachine.State.AI_ACTIVE,
+                                SessionStateMachine.State.WAITING_HUMAN)).stream()
                         .limit(limit)
                         .map(this::toProtoSummary)
                         .toList();
@@ -213,6 +230,10 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
                 .setState(toProtoState(session.getState()))
                 .build());
         observer.onCompleted();
+        // M4-4.5：接管成功后通知 AI 域终止该会话正在生成的回答
+        if (result.ok()) {
+            eventPublisher.publishTakeover(session.getId(), "agent_takeover", request.getAgentId());
+        }
     }
 
     @Override
@@ -228,6 +249,33 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
         observer.onCompleted();
     }
 
+    @Override
+    public void suggestReplies(lingxi.session.v1.Session.SuggestRepliesRequest request,
+                               StreamObserver<lingxi.session.v1.Session.SuggestRepliesResponse> observer) {
+        // 薄委托：上下文组装与降级/入队逻辑集中在协调器，gRPC 层只做参数补全与异常映射
+        String requestId = request.getRequestId().isBlank()
+                ? UUID.randomUUID().toString() : request.getRequestId();
+        try {
+            SuggestResult result = suggestCoordinator.suggest(requestId, request.getSessionId(),
+                    request.getAgentId(), request.getIntent(), request.getMaxSuggestions());
+            observer.onNext(lingxi.session.v1.Session.SuggestRepliesResponse.newBuilder()
+                    .setOk(result.ok())
+                    .setDegraded(result.degraded())
+                    .setDegradeReason(result.degradeReason() == null ? "" : result.degradeReason())
+                    .setQueued(result.queued())
+                    .setRequestId(requestId)
+                    .addAllSuggestions(result.suggestions())
+                    .setElapsedMs(result.elapsedMs())
+                    .setHistoryCount(result.historyCount())
+                    .build());
+            observer.onCompleted();
+        } catch (IllegalArgumentException e) {
+            observer.onError(Status.NOT_FOUND.withDescription(e.getMessage()).asRuntimeException());
+        } catch (IllegalStateException e) {
+            observer.onError(Status.FAILED_PRECONDITION.withDescription(e.getMessage()).asRuntimeException());
+        }
+    }
+
     /** 领域会话 → proto 会话摘要（工作台列表用）。 */
     private lingxi.session.v1.Session.SessionSummary toProtoSummary(Session s) {
         return lingxi.session.v1.Session.SessionSummary.newBuilder()
@@ -238,7 +286,17 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
                 .setCreatedAtMs(s.getCreatedAt().toEpochMilli())
                 .setUpdatedAtMs(s.getUpdatedAt().toEpochMilli())
                 .setMessageCount(s.messageCount())
+                // M4-4.5 摘要移交：随客服队列下发摘要预览（截断后），供坐席接管前了解上下文
+                .setSummary(preview(s.getSummary()))
                 .build();
+    }
+
+    /** 摘要预览：超长按配置截断，避免客服队列列表 payload 膨胀。 */
+    private String preview(String summary) {
+        if (summary == null) {
+            return "";
+        }
+        return summary.length() > summaryPreviewLen ? summary.substring(0, summaryPreviewLen) : summary;
     }
 
     /** 按会话 ID 查找，不存在时向客户端返回 NOT_FOUND。 */
@@ -260,6 +318,7 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
         return switch (state) {
             case INIT -> lingxi.session.v1.Session.SessionState.INIT;
             case AI_ACTIVE -> lingxi.session.v1.Session.SessionState.AI_ACTIVE;
+            case WAITING_HUMAN -> lingxi.session.v1.Session.SessionState.WAITING_HUMAN;
             case HUMAN_CHAT -> lingxi.session.v1.Session.SessionState.HUMAN_CHAT;
             case CLOSED -> lingxi.session.v1.Session.SessionState.CLOSED;
         };
@@ -270,6 +329,7 @@ public class SessionServiceGrpcImpl extends SessionServiceGrpc.SessionServiceImp
         return switch (state) {
             case INIT -> SessionStateMachine.State.INIT;
             case AI_ACTIVE -> SessionStateMachine.State.AI_ACTIVE;
+            case WAITING_HUMAN -> SessionStateMachine.State.WAITING_HUMAN;
             case HUMAN_CHAT -> SessionStateMachine.State.HUMAN_CHAT;
             case CLOSED -> SessionStateMachine.State.CLOSED;
             default -> null;

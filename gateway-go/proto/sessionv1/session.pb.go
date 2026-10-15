@@ -24,10 +24,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// 会话状态：状态机迁移（M3-3.11 AI 化后）
+// 会话状态：状态机迁移（M3-3.11 AI 化 + M4-4.5 转人工联动后）
 //
-//	INIT → {AI_ACTIVE, HUMAN_CHAT, CLOSED}
-//	AI_ACTIVE → {HUMAN_CHAT, CLOSED}（AI 应答中；坐席接管即退出 AI）
+//	INIT → {AI_ACTIVE, WAITING_HUMAN, HUMAN_CHAT, CLOSED}
+//	AI_ACTIVE → {WAITING_HUMAN, HUMAN_CHAT, CLOSED}（AI 应答中；转人工/坐席接管即退出 AI）
+//	WAITING_HUMAN → {HUMAN_CHAT, CLOSED}（待人工接入；仍在客服队列，AI 不再应答）
 //	HUMAN_CHAT → {CLOSED}
 //
 // 非法迁移与重复关闭必须被拒绝，由 Java 会话域保证。
@@ -39,6 +40,7 @@ const (
 	SessionState_HUMAN_CHAT                SessionState = 2 // 人工会话中（坐席接管后）
 	SessionState_CLOSED                    SessionState = 3 // 已关闭
 	SessionState_AI_ACTIVE                 SessionState = 4 // AI 应答中（用户消息触发 AI 后的持续状态）
+	SessionState_WAITING_HUMAN             SessionState = 5 // 待人工接入（AI 请求转人工后；仍在队列，AI 已退出）
 )
 
 // Enum value maps for SessionState.
@@ -49,6 +51,7 @@ var (
 		2: "HUMAN_CHAT",
 		3: "CLOSED",
 		4: "AI_ACTIVE",
+		5: "WAITING_HUMAN",
 	}
 	SessionState_value = map[string]int32{
 		"SESSION_STATE_UNSPECIFIED": 0,
@@ -56,6 +59,7 @@ var (
 		"HUMAN_CHAT":                2,
 		"CLOSED":                    3,
 		"AI_ACTIVE":                 4,
+		"WAITING_HUMAN":             5,
 	}
 )
 
@@ -665,6 +669,7 @@ type SessionSummary struct {
 	CreatedAtMs   int64                  `protobuf:"varint,5,opt,name=created_at_ms,json=createdAtMs,proto3" json:"created_at_ms,omitempty"`
 	UpdatedAtMs   int64                  `protobuf:"varint,6,opt,name=updated_at_ms,json=updatedAtMs,proto3" json:"updated_at_ms,omitempty"`
 	MessageCount  int32                  `protobuf:"varint,7,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
+	Summary       string                 `protobuf:"bytes,8,opt,name=summary,proto3" json:"summary,omitempty"` // 上下文摘要预览（M4-4.5 摘要移交；服务端截断后下发）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -746,6 +751,13 @@ func (x *SessionSummary) GetMessageCount() int32 {
 		return x.MessageCount
 	}
 	return 0
+}
+
+func (x *SessionSummary) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
 }
 
 // 待接管会话列表（客服队列）
@@ -1039,6 +1051,184 @@ func (x *ListAgentSessionsResponse) GetSessions() []*SessionSummary {
 	return nil
 }
 
+// 生成回复建议请求：上下文由 Java 侧组装，同步通道不走上文检索
+type SuggestRepliesRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RequestId      string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 三端贯穿的请求标识（用于结果去重与链路追踪）
+	SessionId      string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	AgentId        string                 `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	Intent         string                 `protobuf:"bytes,4,opt,name=intent,proto3" json:"intent,omitempty"`                                        // 坐席意图/要点（可选，供模型聚焦）
+	MaxSuggestions int32                  `protobuf:"varint,5,opt,name=max_suggestions,json=maxSuggestions,proto3" json:"max_suggestions,omitempty"` // 期望候选条数上限（0 表示用服务端默认）
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SuggestRepliesRequest) Reset() {
+	*x = SuggestRepliesRequest{}
+	mi := &file_session_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuggestRepliesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuggestRepliesRequest) ProtoMessage() {}
+
+func (x *SuggestRepliesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuggestRepliesRequest.ProtoReflect.Descriptor instead.
+func (*SuggestRepliesRequest) Descriptor() ([]byte, []int) {
+	return file_session_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SuggestRepliesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SuggestRepliesRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SuggestRepliesRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *SuggestRepliesRequest) GetIntent() string {
+	if x != nil {
+		return x.Intent
+	}
+	return ""
+}
+
+func (x *SuggestRepliesRequest) GetMaxSuggestions() int32 {
+	if x != nil {
+		return x.MaxSuggestions
+	}
+	return 0
+}
+
+// 生成回复建议响应
+type SuggestRepliesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`                                           // 是否成功产出候选（degraded 且 queued 时为 false）
+	Degraded      bool                   `protobuf:"varint,2,opt,name=degraded,proto3" json:"degraded,omitempty"`                               // 是否降级（同步通道过载/超时）
+	DegradeReason string                 `protobuf:"bytes,3,opt,name=degrade_reason,json=degradeReason,proto3" json:"degrade_reason,omitempty"` // 降级原因：BUSY / TIMEOUT / UNAVAILABLE
+	Queued        bool                   `protobuf:"varint,4,opt,name=queued,proto3" json:"queued,omitempty"`                                   // 是否已转入异步队列（true 时结果稍后经坐席端推送）
+	RequestId     string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Suggestions   []string               `protobuf:"bytes,6,rep,name=suggestions,proto3" json:"suggestions,omitempty"`                        // 候选回复（1~3 条，供坐席选择/编辑）
+	ElapsedMs     int64                  `protobuf:"varint,7,opt,name=elapsed_ms,json=elapsedMs,proto3" json:"elapsed_ms,omitempty"`          // 本次同步耗时
+	HistoryCount  int32                  `protobuf:"varint,8,opt,name=history_count,json=historyCount,proto3" json:"history_count,omitempty"` // 实际注入的上下文消息条数（观测用）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SuggestRepliesResponse) Reset() {
+	*x = SuggestRepliesResponse{}
+	mi := &file_session_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SuggestRepliesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SuggestRepliesResponse) ProtoMessage() {}
+
+func (x *SuggestRepliesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SuggestRepliesResponse.ProtoReflect.Descriptor instead.
+func (*SuggestRepliesResponse) Descriptor() ([]byte, []int) {
+	return file_session_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SuggestRepliesResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *SuggestRepliesResponse) GetDegraded() bool {
+	if x != nil {
+		return x.Degraded
+	}
+	return false
+}
+
+func (x *SuggestRepliesResponse) GetDegradeReason() string {
+	if x != nil {
+		return x.DegradeReason
+	}
+	return ""
+}
+
+func (x *SuggestRepliesResponse) GetQueued() bool {
+	if x != nil {
+		return x.Queued
+	}
+	return false
+}
+
+func (x *SuggestRepliesResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SuggestRepliesResponse) GetSuggestions() []string {
+	if x != nil {
+		return x.Suggestions
+	}
+	return nil
+}
+
+func (x *SuggestRepliesResponse) GetElapsedMs() int64 {
+	if x != nil {
+		return x.ElapsedMs
+	}
+	return 0
+}
+
+func (x *SuggestRepliesResponse) GetHistoryCount() int32 {
+	if x != nil {
+		return x.HistoryCount
+	}
+	return 0
+}
+
 var File_session_proto protoreflect.FileDescriptor
 
 const file_session_proto_rawDesc = "" +
@@ -1089,7 +1279,7 @@ const file_session_proto_rawDesc = "" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\"p\n" +
 	"\x14PullMessagesResponse\x12=\n" +
 	"\bmessages\x18\x01 \x03(\v2!.lingxi.session.v1.SessionMessageR\bmessages\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\x87\x02\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\xa1\x02\n" +
 	"\x0eSessionSummary\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
@@ -1098,7 +1288,8 @@ const file_session_proto_rawDesc = "" +
 	"\bagent_id\x18\x04 \x01(\tR\aagentId\x12\"\n" +
 	"\rcreated_at_ms\x18\x05 \x01(\x03R\vcreatedAtMs\x12\"\n" +
 	"\rupdated_at_ms\x18\x06 \x01(\x03R\vupdatedAtMs\x12#\n" +
-	"\rmessage_count\x18\a \x01(\x05R\fmessageCount\"2\n" +
+	"\rmessage_count\x18\a \x01(\x05R\fmessageCount\x12\x18\n" +
+	"\asummary\x18\b \x01(\tR\asummary\"2\n" +
 	"\x1aListWaitingSessionsRequest\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\x05R\x05limit\"\\\n" +
 	"\x1bListWaitingSessionsResponse\x12=\n" +
@@ -1114,7 +1305,26 @@ const file_session_proto_rawDesc = "" +
 	"\x18ListAgentSessionsRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\"Z\n" +
 	"\x19ListAgentSessionsResponse\x12=\n" +
-	"\bsessions\x18\x01 \x03(\v2!.lingxi.session.v1.SessionSummaryR\bsessions*b\n" +
+	"\bsessions\x18\x01 \x03(\v2!.lingxi.session.v1.SessionSummaryR\bsessions\"\xb1\x01\n" +
+	"\x15SuggestRepliesRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x19\n" +
+	"\bagent_id\x18\x03 \x01(\tR\aagentId\x12\x16\n" +
+	"\x06intent\x18\x04 \x01(\tR\x06intent\x12'\n" +
+	"\x0fmax_suggestions\x18\x05 \x01(\x05R\x0emaxSuggestions\"\x88\x02\n" +
+	"\x16SuggestRepliesResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1a\n" +
+	"\bdegraded\x18\x02 \x01(\bR\bdegraded\x12%\n" +
+	"\x0edegrade_reason\x18\x03 \x01(\tR\rdegradeReason\x12\x16\n" +
+	"\x06queued\x18\x04 \x01(\bR\x06queued\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\x12 \n" +
+	"\vsuggestions\x18\x06 \x03(\tR\vsuggestions\x12\x1d\n" +
+	"\n" +
+	"elapsed_ms\x18\a \x01(\x03R\telapsedMs\x12#\n" +
+	"\rhistory_count\x18\b \x01(\x05R\fhistoryCount*u\n" +
 	"\fSessionState\x12\x1d\n" +
 	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\b\n" +
 	"\x04INIT\x10\x01\x12\x0e\n" +
@@ -1122,7 +1332,8 @@ const file_session_proto_rawDesc = "" +
 	"HUMAN_CHAT\x10\x02\x12\n" +
 	"\n" +
 	"\x06CLOSED\x10\x03\x12\r\n" +
-	"\tAI_ACTIVE\x10\x042\xcc\x05\n" +
+	"\tAI_ACTIVE\x10\x04\x12\x11\n" +
+	"\rWAITING_HUMAN\x10\x052\xb3\x06\n" +
 	"\x0eSessionService\x12b\n" +
 	"\rCreateSession\x12'.lingxi.session.v1.CreateSessionRequest\x1a(.lingxi.session.v1.CreateSessionResponse\x12\\\n" +
 	"\vSendMessage\x12%.lingxi.session.v1.SendMessageRequest\x1a&.lingxi.session.v1.SendMessageResponse\x12\\\n" +
@@ -1130,7 +1341,8 @@ const file_session_proto_rawDesc = "" +
 	"\fPullMessages\x12&.lingxi.session.v1.PullMessagesRequest\x1a'.lingxi.session.v1.PullMessagesResponse\x12t\n" +
 	"\x13ListWaitingSessions\x12-.lingxi.session.v1.ListWaitingSessionsRequest\x1a..lingxi.session.v1.ListWaitingSessionsResponse\x12S\n" +
 	"\bTakeOver\x12\".lingxi.session.v1.TakeOverRequest\x1a#.lingxi.session.v1.TakeOverResponse\x12n\n" +
-	"\x11ListAgentSessions\x12+.lingxi.session.v1.ListAgentSessionsRequest\x1a,.lingxi.session.v1.ListAgentSessionsResponseB.Z,github.com/lingxi/gateway-go/proto/sessionv1b\x06proto3"
+	"\x11ListAgentSessions\x12+.lingxi.session.v1.ListAgentSessionsRequest\x1a,.lingxi.session.v1.ListAgentSessionsResponse\x12e\n" +
+	"\x0eSuggestReplies\x12(.lingxi.session.v1.SuggestRepliesRequest\x1a).lingxi.session.v1.SuggestRepliesResponseB.Z,github.com/lingxi/gateway-go/proto/sessionv1b\x06proto3"
 
 var (
 	file_session_proto_rawDescOnce sync.Once
@@ -1145,7 +1357,7 @@ func file_session_proto_rawDescGZIP() []byte {
 }
 
 var file_session_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_session_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_session_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_session_proto_goTypes = []any{
 	(SessionState)(0),                   // 0: lingxi.session.v1.SessionState
 	(*CreateSessionRequest)(nil),        // 1: lingxi.session.v1.CreateSessionRequest
@@ -1164,6 +1376,8 @@ var file_session_proto_goTypes = []any{
 	(*TakeOverResponse)(nil),            // 14: lingxi.session.v1.TakeOverResponse
 	(*ListAgentSessionsRequest)(nil),    // 15: lingxi.session.v1.ListAgentSessionsRequest
 	(*ListAgentSessionsResponse)(nil),   // 16: lingxi.session.v1.ListAgentSessionsResponse
+	(*SuggestRepliesRequest)(nil),       // 17: lingxi.session.v1.SuggestRepliesRequest
+	(*SuggestRepliesResponse)(nil),      // 18: lingxi.session.v1.SuggestRepliesResponse
 }
 var file_session_proto_depIdxs = []int32{
 	0,  // 0: lingxi.session.v1.CreateSessionResponse.state:type_name -> lingxi.session.v1.SessionState
@@ -1181,15 +1395,17 @@ var file_session_proto_depIdxs = []int32{
 	11, // 12: lingxi.session.v1.SessionService.ListWaitingSessions:input_type -> lingxi.session.v1.ListWaitingSessionsRequest
 	13, // 13: lingxi.session.v1.SessionService.TakeOver:input_type -> lingxi.session.v1.TakeOverRequest
 	15, // 14: lingxi.session.v1.SessionService.ListAgentSessions:input_type -> lingxi.session.v1.ListAgentSessionsRequest
-	2,  // 15: lingxi.session.v1.SessionService.CreateSession:output_type -> lingxi.session.v1.CreateSessionResponse
-	4,  // 16: lingxi.session.v1.SessionService.SendMessage:output_type -> lingxi.session.v1.SendMessageResponse
-	7,  // 17: lingxi.session.v1.SessionService.ChangeState:output_type -> lingxi.session.v1.ChangeStateResponse
-	9,  // 18: lingxi.session.v1.SessionService.PullMessages:output_type -> lingxi.session.v1.PullMessagesResponse
-	12, // 19: lingxi.session.v1.SessionService.ListWaitingSessions:output_type -> lingxi.session.v1.ListWaitingSessionsResponse
-	14, // 20: lingxi.session.v1.SessionService.TakeOver:output_type -> lingxi.session.v1.TakeOverResponse
-	16, // 21: lingxi.session.v1.SessionService.ListAgentSessions:output_type -> lingxi.session.v1.ListAgentSessionsResponse
-	15, // [15:22] is the sub-list for method output_type
-	8,  // [8:15] is the sub-list for method input_type
+	17, // 15: lingxi.session.v1.SessionService.SuggestReplies:input_type -> lingxi.session.v1.SuggestRepliesRequest
+	2,  // 16: lingxi.session.v1.SessionService.CreateSession:output_type -> lingxi.session.v1.CreateSessionResponse
+	4,  // 17: lingxi.session.v1.SessionService.SendMessage:output_type -> lingxi.session.v1.SendMessageResponse
+	7,  // 18: lingxi.session.v1.SessionService.ChangeState:output_type -> lingxi.session.v1.ChangeStateResponse
+	9,  // 19: lingxi.session.v1.SessionService.PullMessages:output_type -> lingxi.session.v1.PullMessagesResponse
+	12, // 20: lingxi.session.v1.SessionService.ListWaitingSessions:output_type -> lingxi.session.v1.ListWaitingSessionsResponse
+	14, // 21: lingxi.session.v1.SessionService.TakeOver:output_type -> lingxi.session.v1.TakeOverResponse
+	16, // 22: lingxi.session.v1.SessionService.ListAgentSessions:output_type -> lingxi.session.v1.ListAgentSessionsResponse
+	18, // 23: lingxi.session.v1.SessionService.SuggestReplies:output_type -> lingxi.session.v1.SuggestRepliesResponse
+	16, // [16:24] is the sub-list for method output_type
+	8,  // [8:16] is the sub-list for method input_type
 	8,  // [8:8] is the sub-list for extension type_name
 	8,  // [8:8] is the sub-list for extension extendee
 	0,  // [0:8] is the sub-list for field type_name
@@ -1206,7 +1422,7 @@ func file_session_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_proto_rawDesc), len(file_session_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

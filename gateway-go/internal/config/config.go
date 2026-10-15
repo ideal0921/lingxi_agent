@@ -21,6 +21,8 @@ type Config struct {
 	KafkaBrokers []string
 	// KafkaChunkTopic AI 流式片段主题。
 	KafkaChunkTopic string
+	// KafkaSuggestTopic 快捷回复建议异步结果主题（M4-4.6 过载降级）。
+	KafkaSuggestTopic string
 	// KafkaGroupID 消费组（多网关实例同组共享分区）。
 	KafkaGroupID string
 }
@@ -34,6 +36,7 @@ func Load() *Config {
 		KafkaEnabled:       getEnv("GATEWAY_KAFKA_ENABLED", "false") == "true",
 		KafkaBrokers:       splitAndTrim(getEnv("GATEWAY_KAFKA_BROKERS", "localhost:9092")),
 		KafkaChunkTopic:    getEnv("GATEWAY_KAFKA_CHUNK_TOPIC", "lingxi.ai.chunk"),
+		KafkaSuggestTopic:  getEnv("GATEWAY_KAFKA_SUGGEST_TOPIC", "lingxi.ai.suggest.result"),
 		KafkaGroupID:       getEnv("GATEWAY_KAFKA_GROUP_ID", "gateway-go"),
 	}
 }

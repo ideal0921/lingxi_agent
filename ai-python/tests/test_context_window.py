@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 
 from app.agent.graph import build_prompt
@@ -112,6 +113,13 @@ class TestEventParsing:
     def test_missing_history_defaults_to_empty(self) -> None:
         event = SessionMessageEvent.from_payload({"session_id": "s1", "content": "问题"})
         assert event.history == [] and event.summary == ""
+        assert event.user_id == "", "缺 user_id 时默认为空（调用侧据此跳过记忆功能）"
+
+    def test_parses_user_id(self) -> None:
+        event = SessionMessageEvent.from_payload(
+            {"session_id": "s1", "content": "问题", "tenant_id": "t1", "user_id": "u1"}
+        )
+        assert event.user_id == "u1" and event.tenant_id == "t1"
 
 
 class TestPromptInjection:
@@ -133,6 +141,26 @@ class TestPromptInjection:
         prompt = build_prompt({"query": "问题", "summary": "", "history": [], "context_text": ""})
         assert "【会话摘要】" not in prompt
 
+    def test_memory_section_precedes_summary(self) -> None:
+        """分层记忆（M4-4.4）：跨会话长期画像应排在会话内摘要之前。"""
+        prompt = build_prompt(
+            {
+                "query": "问题",
+                "memory": "偏好：货到付款；身份：企业采购",
+                "summary": "用户此前咨询退款时效",
+                "history": [],
+                "context_text": "",
+            }
+        )
+
+        assert "【用户长期记忆】" in prompt and "偏好：货到付款" in prompt
+        assert prompt.index("【用户长期记忆】") < prompt.index("【会话摘要】")
+        assert prompt.index("【会话摘要】") < prompt.index("【知识片段】")
+
+    def test_no_memory_section_when_empty(self) -> None:
+        prompt = build_prompt({"query": "问题", "memory": "", "summary": "", "history": [], "context_text": ""})
+        assert "【用户长期记忆】" not in prompt
+
 
 class TestSummarizeHistory:
     async def test_returns_summary_and_caps_length(self) -> None:
@@ -153,6 +181,27 @@ class TestSummarizeHistory:
         gateway = _FakeGateway()
         assert await summarize_history(gateway, [], previous_summary="旧摘要") == "旧摘要"
         assert gateway.prompts == [], "无溢出消息时不调用模型"
+
+    async def test_hard_timeout_falls_back_to_previous(self) -> None:
+        """消费活性加固（M4-4.5）：非关键路径硬性超时——网关挂起也不得长时间占用资源。
+
+        网关内部最坏耗时 = providers × (retries+1) × timeout，实测曾把消费协程阻塞到
+        超过 Kafka `max.poll.interval.ms` 而被踢出消费组。
+        """
+
+        class _HangGateway:
+            async def generate(self, prompt: str, model: str | None = None) -> str:
+                await asyncio.sleep(5)
+                return "不应返回"
+
+        result = await summarize_history(
+            _HangGateway(),
+            [ChatMessage(role="user", content="旧问题")],
+            previous_summary="旧摘要",
+            timeout_seconds=0.05,
+        )
+
+        assert result == "旧摘要", "超时应沿用原摘要而非阻塞"
 
 
 class TestSummaryWriteBack:

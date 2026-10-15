@@ -3,6 +3,23 @@
   "description": "灵犀智能客服 Golden Set v1：覆盖售后/物流/会员三类知识的事实问答、同义改写、边界拒答与幻觉守卫；与 app/evaluator/golden/kb 下的种子知识文档配套。",
   "cases": [
     {
+      "id": "workflow-runtime-refund-fact",
+      "query": "钱退回来一般要等几天？",
+      "tags": ["编排回归", "退款", "改写"],
+      "expect": {
+        "must_contain": ["1-3个工作日", "3-7个工作日"],
+        "expect_heading": "退款时效"
+      }
+    },
+    {
+      "id": "workflow-runtime-guard-refusal",
+      "query": "你们平台有卖钢琴的吗？",
+      "tags": ["编排回归", "拒答"],
+      "expect": {
+        "refusal": true
+      }
+    },
+    {
       "id": "refund-time",
       "query": "退款多久能到账？",
       "tags": ["退款", "事实"],

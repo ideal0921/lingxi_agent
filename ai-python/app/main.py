@@ -9,6 +9,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
@@ -70,6 +71,44 @@ async def _run_kb_delete_consumer() -> None:
     await run_kb_delete_consumer(config=settings, store=await get_store())
 
 
+async def _run_session_takeover_consumer() -> None:
+    """拉起接管通知消费协程（M4-4.5：接管成功 → 终止正在生成的回答）。"""
+    from app.consumers.session_takeover import run_session_takeover_consumer
+    from app.runtime import get_interrupt_registry
+
+    await run_session_takeover_consumer(
+        config=settings, interrupt_registry=await get_interrupt_registry()
+    )
+
+
+async def _run_suggest_request_consumer() -> None:
+    """拉起建议异步降级消费协程（M4-4.6：同步通道过载后的请求 → 生成 → 推坐席端）。"""
+    from app.consumers.suggest_request import run_suggest_request_consumer
+    from app.runtime import get_producer
+
+    await run_suggest_request_consumer(
+        config=settings, producer=await get_producer(), gateway=gateway
+    )
+
+
+async def _start_suggest_grpc_server() -> Any:
+    """启动快捷回复 gRPC 同步服务端（M4-4.6）；返回 server 供停机释放。
+
+    同步路径**不走知识检索**，故此处只装配 LLM 网关与并发闸门（不触达 Milvus）。
+    """
+    from app.runtime import get_suggest_gate
+    from app.sync.server import create_sync_server
+
+    server = create_sync_server(gateway=gateway, config=settings, gate=await get_suggest_gate())
+    await server.start()
+    logger.info(
+        "快捷回复 gRPC 同步服务端已启动 port=%d 闸门=%d",
+        settings.suggest_grpc_port,
+        settings.suggest_gate,
+    )
+    return server
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     consumer_tasks: list[asyncio.Task[None]] = []
@@ -78,12 +117,17 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             ("会话消息", _run_streaming_consumer),
             ("知识库入库", _run_kb_ingest_consumer),
             ("知识库下线清理", _run_kb_delete_consumer),
+            ("人工接管通知", _run_session_takeover_consumer),
+            ("建议异步降级", _run_suggest_request_consumer),
         )
         for name, runner in runners:
             task = asyncio.create_task(runner())
             task.add_done_callback(_log_task_failure)
             consumer_tasks.append(task)
             logger.info("流式消费协程已启动: %s", name)
+    suggest_server: Any = None
+    if settings.suggest_grpc_enabled:
+        suggest_server = await _start_suggest_grpc_server()
     yield
     for task in consumer_tasks:
         task.cancel()
@@ -92,6 +136,8 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             await task
         except asyncio.CancelledError:
             pass
+    if suggest_server is not None:
+        await suggest_server.stop(grace=None)  # 立即停机（不等待在途请求）
     await shutdown()
 
 
@@ -102,6 +148,15 @@ app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
 def health() -> dict:
     """健康检查，供 LB / K8s 探活。"""
     return {"status": "ok", "service": "ai-python"}
+
+
+@app.get("/api/v1/suggest/stats")
+async def suggest_stats() -> dict:
+    """快捷回复同步通道统计（M4-4.6）：压测观察点——``in_flight`` 应能回落到 0。"""
+    from app.runtime import get_suggest_gate
+
+    gate = await get_suggest_gate()
+    return gate.snapshot()
 
 
 class GenerateRequest(BaseModel):

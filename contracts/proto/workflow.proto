@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+// 编排域契约（M4-4.7）：Agent 工作流的定义、草稿、发布版本与回滚。
+// 由 Java 编排域实现（MySQL 持久化），Go 网关经 gRPC 转发 Studio 调用。
+// 图定义（节点/边）以 JSON 文本承载：结构与前端画布、M4-4.8 运行时一致，见
+// ai-python 后续按版本加载图时共用的同一份 JSON Schema。
+package lingxi.workflow.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto/workflowv1";
+
+// 工作流主体：元数据 + 当前草稿 + 版本计数与灰度规则。
+// draft_definition_json 随详情/保存草稿下发；列表接口为空（避免 payload 膨胀）。
+message Workflow {
+  string workflow_id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  string status = 5;                  // ENABLED / DISABLED
+  string draft_definition_json = 6;   // 当前草稿图定义（JSON，可空）
+  int32 latest_version = 7;           // 最新版本号（0 表示从未发布）
+  int32 published_version = 8;        // 生效版本号（0 表示未发布）
+  int64 created_at_ms = 9;
+  int64 updated_at_ms = 10;
+  // 灰度（M4-4.8）：按会话稳定分流到 canary_version，比例 canary_percent（0 表示关闭灰度）。
+  // 由 SetRollout 设置；灰度版本可与生效版本不同，从而实现「已发布但未生效」。
+  int32 canary_version = 11;
+  int32 canary_percent = 12;
+}
+
+// 版本快照视图（列表用；不含图定义正文）。
+message WorkflowVersionView {
+  int32 version = 1;
+  string note = 2;
+  string operator = 3;
+  int64 published_at_ms = 4;
+  int64 created_at_ms = 5;
+}
+
+// 按租户列出工作流
+message ListWorkflowsRequest {
+  string tenant_id = 1;
+}
+
+message ListWorkflowsResponse {
+  repeated Workflow workflows = 1;
+}
+
+// 新建工作流（初始为空草稿、未发布）
+message CreateWorkflowRequest {
+  string tenant_id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message CreateWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+// 查询工作流详情（含当前草稿）
+message GetWorkflowRequest {
+  string workflow_id = 1;
+}
+
+message GetWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+// 保存草稿（宽松：仅做结构可解析校验，不校验业务规则，避免编辑过程被卡）
+message SaveDraftRequest {
+  string workflow_id = 1;
+  string definition_json = 2;
+}
+
+message SaveDraftResponse {
+  bool ok = 1;
+  string reason = 2;      // 拒绝原因（图不可解析/超限时非空）
+  Workflow workflow = 3;
+}
+
+// 发布：对当前草稿做全量校验，通过则冻结为不可变版本快照。
+// canary=true 时为**灰度发布**（M4-4.8）：只推进 latest_version，**不改** published_version，
+// 随后由 SetRollout 指定分流比例，使新版本先按比例生效。
+message PublishWorkflowRequest {
+  string workflow_id = 1;
+  string note = 2;        // 发布说明
+  string operator = 3;    // 操作者
+  bool canary = 4;        // 是否灰度发布（不立即全量生效）
+}
+
+message PublishWorkflowResponse {
+  bool ok = 1;
+  string reason = 2;      // 校验失败原因（中文，非空表示被拒）
+  int32 version = 3;      // 成功时为新版本号
+}
+
+// 设置灰度分流（M4-4.8）：canary_percent=0 表示关闭灰度（canary_version 归 0）
+message SetRolloutRequest {
+  string workflow_id = 1;
+  int32 canary_version = 2;   // 灰度版本号（关闭灰度时置 0）
+  int32 canary_percent = 3;   // 分流比例 0~100
+  string operator = 4;
+}
+
+message SetRolloutResponse {
+  bool ok = 1;
+  string reason = 2;      // 拒绝原因（比例越界/版本不存在等）
+  Workflow workflow = 3;
+}
+
+// 版本列表（按版本号倒序）
+message ListVersionsRequest {
+  string workflow_id = 1;
+}
+
+message ListVersionsResponse {
+  repeated WorkflowVersionView versions = 1;
+}
+
+// 查询某版本快照（只读，不影响草稿）
+message GetVersionRequest {
+  string workflow_id = 1;
+  int32 version = 2;
+}
+
+message GetVersionResponse {
+  bool ok = 1;
+  string reason = 2;
+  int32 version = 3;
+  string definition_json = 4;
+  string note = 5;
+  string operator = 6;
+  int64 published_at_ms = 7;
+}
+
+// 回滚：把历史版本内容复制为当前草稿（不新增版本、不改生效版本；
+// 运营复核后再发布即生成新版本号，历史完整可审计）
+message RollbackVersionRequest {
+  string workflow_id = 1;
+  int32 version = 2;
+  string operator = 3;
+}
+
+message RollbackVersionResponse {
+  bool ok = 1;
+  string reason = 2;
+  Workflow workflow = 3;
+}
+
+// 删除工作流（连带清除其全部版本快照）
+message DeleteWorkflowRequest {
+  string workflow_id = 1;
+}
+
+message DeleteWorkflowResponse {
+  bool ok = 1;
+  string reason = 2;
+}
+
+// 编排域服务：由 Java 实现，Go 网关通过 gRPC 调用
+service WorkflowService {
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
+  rpc CreateWorkflow(CreateWorkflowRequest) returns (CreateWorkflowResponse);
+  rpc GetWorkflow(GetWorkflowRequest) returns (GetWorkflowResponse);
+  rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  rpc PublishWorkflow(PublishWorkflowRequest) returns (PublishWorkflowResponse);
+  rpc SetRollout(SetRolloutRequest) returns (SetRolloutResponse);
+  rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse);
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+  rpc RollbackVersion(RollbackVersionRequest) returns (RollbackVersionResponse);
+  rpc DeleteWorkflow(DeleteWorkflowRequest) returns (DeleteWorkflowResponse);
+}

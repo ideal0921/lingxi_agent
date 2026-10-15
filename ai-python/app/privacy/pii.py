@@ -139,6 +139,39 @@ def _select(hits: list[PiiHit]) -> list[PiiHit]:
     return sorted(selected, key=lambda hit: hit.start)
 
 
+def strip_placeholders(text: str) -> str:
+    """移除文本中形如 ``[手机号1]`` 的占位符（跨会话长期记忆专用，M4-4.4）。
+
+    占位符只在**产生它的那次会话**内可还原（``_token_map`` 为会话级内存态，进程重启
+    即丢失）：跨会话写入画像时保留占位符毫无意义（还原不了），还会把字面量泄漏给
+    用户。故画像入库前一律清除。
+    """
+    if not text:
+        return ""
+    return _PLACEHOLDER_LIKE.sub("", text)
+
+
+def redact_pii(text: str, *, mask_address: bool = True) -> str:
+    """把文本中的 PII 替换为**纯标签**（如「（手机号）」），不生成 ``[..]`` 形态占位符。
+
+    用于跨会话长期记忆（M4-4.4）：画像需保留「用户有手机号 / 有收货地址」这类语义，
+    但绝不能持久化具体值，也不能持久化无法跨会话还原的占位符。
+    """
+    if not text:
+        return ""
+    selected = _select(_detect(text, mask_address=mask_address))
+    if not selected:
+        return text
+    parts: list[str] = []
+    cursor = 0
+    for hit in selected:
+        parts.append(text[cursor:hit.start])
+        parts.append(f"（{_LABELS[hit.kind]}）")
+        cursor = hit.end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def _safe_emit_length(buffer: str, tokens: tuple[str, ...], max_len: int) -> int:
     """计算可安全输出的前缀长度。
 

@@ -41,6 +41,8 @@ type Client struct {
 	conn      *websocket.Conn
 	hub       *Hub
 	session   SessionClient
+	// role 连接角色（user / agent）：用于下行差异化投递（如建议结果仅推坐席端）。
+	role string
 
 	// 断连缓冲：近期消息（seq → 内容），供重连续传。
 	bufferMu sync.Mutex
@@ -51,18 +53,29 @@ type Client struct {
 	send chan *Envelope
 }
 
-// NewClient 创建连接对象并注册到 Hub。
+// NewClient 创建连接对象并注册到 Hub（缺省角色 user，保持既有调用方兼容）。
 func NewClient(sessionID string, conn *websocket.Conn, hub *Hub, session SessionClient) *Client {
+	return NewClientWithRole(sessionID, conn, hub, session, "user")
+}
+
+// NewClientWithRole 创建带角色的连接对象并注册到 Hub。
+func NewClientWithRole(sessionID string, conn *websocket.Conn, hub *Hub, session SessionClient, role string) *Client {
 	c := &Client{
 		sessionID: sessionID,
 		conn:      conn,
 		hub:       hub,
 		session:   session,
+		role:      role,
 		buffer:    make([]*sessionv1.SessionMessage, 0, bufferMax),
 		send:      make(chan *Envelope, writeBufferSize),
 	}
 	hub.Register(c)
 	return c
+}
+
+// Role 返回连接角色（user / agent），供角色化广播筛选。
+func (c *Client) Role() string {
+	return c.role
 }
 
 // Run 启动读写循环（阻塞直到连接关闭）。

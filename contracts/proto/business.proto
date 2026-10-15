@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+// 业务工具契约（M4-4.2）：AI 域经 Function Calling 调用 Java 业务域，
+// 查询订单/物流、提交退换货申请。
+// 生成命令见 scripts/gen-proto.sh（Go/Python）与 core-java/gateway-api（Maven 插件）。
+package lingxi.business.v1;
+
+option go_package = "github.com/lingxi/gateway-go/proto/businessv1";
+
+// ---------- 订单查询 ----------
+
+message GetOrderRequest {
+  string tenant_id = 1;     // 租户标识（强制隔离，越权查询一律返回 not found）
+  string order_no = 2;      // 订单号
+}
+
+message OrderReply {
+  bool found = 1;                 // 是否命中
+  string reason = 2;              // 未命中原因（订单不存在 / 不属于该租户）
+  string order_no = 3;
+  string status = 4;              // PAID / SHIPPED / DELIVERED / REFUNDING / CLOSED
+  string amount = 5;              // 订单金额（元，字符串保留两位小数，避免浮点误差）
+  int64 created_at_ms = 6;
+  string items_summary = 7;       // 商品摘要（名称×数量，多件以「、」分隔）
+}
+
+// ---------- 物流查询 ----------
+
+message GetLogisticsRequest {
+  string tenant_id = 1;
+  string order_no = 2;
+}
+
+message LogisticsReply {
+  bool found = 1;
+  string reason = 2;
+  string order_no = 3;
+  string carrier = 4;             // 承运商
+  string tracking_no = 5;         // 运单号
+  string status = 6;              // PENDING / PICKED / IN_TRANSIT / OUT_FOR_DELIVERY / DELIVERED / EXCEPTION
+  string latest_event = 7;        // 最新物流动态（自然语言，可直接入提示词）
+  int64 updated_at_ms = 8;
+}
+
+// ---------- 退换货申请 ----------
+
+message SubmitReturnRequest {
+  string tenant_id = 1;
+  string order_no = 2;
+  string return_type = 3;         // REFUND（仅退款）/ EXCHANGE（换货）
+  string reason = 4;              // 用户申请原因
+}
+
+message SubmitReturnReply {
+  bool ok = 1;
+  string reason = 2;              // 失败原因（订单不存在 / 状态不允许 / 已有在处理申请）
+  string return_id = 3;           // 受理单号
+  string status = 4;              // ACCEPTED / REJECTED
+}
+
+// 业务工具服务：由 Java 业务域实现，AI 域作为 gRPC 客户端调用（超时 5s + 重试 1 次 + 降级）
+service BusinessToolService {
+  rpc GetOrder(GetOrderRequest) returns (OrderReply);
+  rpc GetLogistics(GetLogisticsRequest) returns (LogisticsReply);
+  rpc SubmitReturn(SubmitReturnRequest) returns (SubmitReturnReply);
+}

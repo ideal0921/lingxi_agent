@@ -6,14 +6,15 @@ import "encoding/json"
 
 // 消息类型：客户端与网关之间的协议信封。
 const (
-	MsgTypePing   = "ping"   // 客户端心跳
-	MsgTypePong   = "pong"   // 网关心跳应答
-	MsgTypeSend   = "send"   // 上行：用户发消息
-	MsgTypeAck    = "ack"    // 下行：网关对 send 的确认（携带 seq）
-	MsgTypeChat   = "chat"   // 下行：会话消息广播（坐席回复等）
-	MsgTypeChunk  = "chunk"  // 下行：AI 流式片段（M3-3.8，前端据此打字机渲染）
-	MsgTypeError  = "error"  // 下行：错误提示
-	MsgTypeResume = "resume" // 上行：断连重连，携带 lastSeq
+	MsgTypePing    = "ping"    // 客户端心跳
+	MsgTypePong    = "pong"    // 网关心跳应答
+	MsgTypeSend    = "send"    // 上行：用户发消息
+	MsgTypeAck     = "ack"     // 下行：网关对 send 的确认（携带 seq）
+	MsgTypeChat    = "chat"    // 下行：会话消息广播（坐席回复等）
+	MsgTypeChunk   = "chunk"   // 下行：AI 流式片段（M3-3.8，前端据此打字机渲染）；终帧可携带 interrupted（M4-4.5）
+	MsgTypeSuggest = "suggest" // 下行：快捷回复建议异步结果（M4-4.6，仅推坐席端）
+	MsgTypeError   = "error"   // 下行：错误提示
+	MsgTypeResume  = "resume"  // 上行：断连重连，携带 lastSeq
 )
 
 // Envelope 网关与客户端的统一消息信封。
@@ -25,10 +26,18 @@ type Envelope struct {
 	Seq       int64  `json:"seq,omitempty"`      // 会话内游标
 	LastSeq   int64  `json:"last_seq,omitempty"` // resume 续传起点
 	MessageID string `json:"message_id,omitempty"`
+	// RequestID 请求标识（suggest 专用，M4-4.6）：三端贯穿，用于同步/异步结果去重
+	RequestID string `json:"request_id,omitempty"`
+	// Suggestions 回复建议候选（suggest 专用）：仅供坐席端消费，绝不推给用户端
+	Suggestions []string `json:"suggestions,omitempty"`
 	// Index 流式片段序号（chunk 专用，**不使用 omitempty**：0 是合法序号，需显式下发）
 	Index int `json:"index"`
 	// Finished 是否本轮流结束（chunk 专用，**不使用 omitempty**：显式表达流状态）
-	Finished  bool   `json:"finished"`
+	Finished bool `json:"finished"`
+	// Interrupted 本轮是否因人工接管而中断（chunk 专用，**不使用 omitempty**：显式表达中断态）
+	Interrupted bool `json:"interrupted"`
+	// Reason 中断原因（chunk 专用）：agent_takeover / handoff_requested
+	Reason    string `json:"reason,omitempty"`
 	Timestamp int64  `json:"timestamp_ms,omitempty"`
 	Error     string `json:"error,omitempty"`
 }

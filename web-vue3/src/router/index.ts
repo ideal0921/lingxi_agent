@@ -14,8 +14,12 @@ const router = createRouter({
       name: 'workbench',
       component: () => import('../views/workbench/Index.vue'),
     },
+    {
+      path: '/studio',
+      name: 'studio',
+      component: () => import('../views/studio/Index.vue'),
+    },
     // TODO(M2): 管理后台 /admin
-    // TODO(M4): Agent 编排 /studio
   ],
 })
 

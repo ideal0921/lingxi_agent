@@ -50,6 +50,39 @@ func TestToEnvelopeMapsChunkFields(t *testing.T) {
 	}
 }
 
+func TestToEnvelopeMapsInterruptedFields(t *testing.T) {
+	// M4-4.5 人工接管：终帧携带 interrupted 与 reason，需正确映射到信封
+	event := &ChunkEvent{
+		SessionID: "s1", MessageID: "ai-1", Index: 5, Delta: "", Finished: true,
+		Interrupted: true, Reason: "agent_takeover",
+	}
+
+	env := ToEnvelope(event)
+
+	if !env.Interrupted {
+		t.Fatalf("Interrupted 应为 true")
+	}
+	if env.Reason != "agent_takeover" {
+		t.Fatalf("Reason 映射不符，实际 %q", env.Reason)
+	}
+
+	// interrupted 不使用 omitempty，序列化后必须显式存在；reason 也应存在
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("反序列化失败: %v", err)
+	}
+	if v, ok := decoded["interrupted"]; !ok || v.(bool) != true {
+		t.Fatalf("interrupted 键应显式为 true: %s", raw)
+	}
+	if decoded["reason"] != "agent_takeover" {
+		t.Fatalf("reason 键应为 agent_takeover: %s", raw)
+	}
+}
+
 func TestEnvelopeJSONShapeForFrontend(t *testing.T) {
 	// 前端按 type/message_id/index/content/finished/error 解析，需保证序列化键名稳定
 	env := ToEnvelope(&ChunkEvent{SessionID: "s1", MessageID: "ai-1", Index: 0, Delta: "x"})

@@ -70,6 +70,11 @@ class SessionServiceStub:
                 request_serializer=session__pb2.ListAgentSessionsRequest.SerializeToString,
                 response_deserializer=session__pb2.ListAgentSessionsResponse.FromString,
                 _registered_method=True)
+        self.SuggestReplies = channel.unary_unary(
+                '/lingxi.session.v1.SessionService/SuggestReplies',
+                request_serializer=session__pb2.SuggestRepliesRequest.SerializeToString,
+                response_deserializer=session__pb2.SuggestRepliesResponse.FromString,
+                _registered_method=True)
 
 
 class SessionServiceServicer:
@@ -118,6 +123,12 @@ class SessionServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SuggestReplies(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SessionServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -155,6 +166,11 @@ def add_SessionServiceServicer_to_server(servicer, server):
                     servicer.ListAgentSessions,
                     request_deserializer=session__pb2.ListAgentSessionsRequest.FromString,
                     response_serializer=session__pb2.ListAgentSessionsResponse.SerializeToString,
+            ),
+            'SuggestReplies': grpc.unary_unary_rpc_method_handler(
+                    servicer.SuggestReplies,
+                    request_deserializer=session__pb2.SuggestRepliesRequest.FromString,
+                    response_serializer=session__pb2.SuggestRepliesResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -347,6 +363,33 @@ class SessionService:
             '/lingxi.session.v1.SessionService/ListAgentSessions',
             session__pb2.ListAgentSessionsRequest.SerializeToString,
             session__pb2.ListAgentSessionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SuggestReplies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/lingxi.session.v1.SessionService/SuggestReplies',
+            session__pb2.SuggestRepliesRequest.SerializeToString,
+            session__pb2.SuggestRepliesResponse.FromString,
             options,
             channel_credentials,
             insecure,

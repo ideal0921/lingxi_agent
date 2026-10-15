@@ -31,12 +31,16 @@ func NewHandler(hub *Hub, session SessionClient) *Handler {
 }
 
 // ServeWS 升级 HTTP 连接为 WSS 并接管会话长连接。
-// 路由：GET /ws?session_id=xxx
+// 路由：GET /ws?session_id=xxx&role=agent（role 缺省为 user）
 func (h *Handler) ServeWS(c *gin.Context) {
 	sessionID := c.Query("session_id")
 	if sessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 session_id 参数"})
 		return
+	}
+	role := c.Query("role")
+	if role == "" {
+		role = "user"
 	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -45,8 +49,8 @@ func (h *Handler) ServeWS(c *gin.Context) {
 		return
 	}
 
-	client := NewClient(sessionID, conn, h.hub, h.session)
-	log.Printf("ws: 会话 %s 已连接", sessionID)
+	client := NewClientWithRole(sessionID, conn, h.hub, h.session, role)
+	log.Printf("ws: 会话 %s 角色 %s 已连接", sessionID, role)
 	client.Run()
 }
 

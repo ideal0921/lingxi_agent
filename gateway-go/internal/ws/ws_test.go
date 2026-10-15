@@ -118,6 +118,47 @@ func TestHubRegisterBroadcastUnregister(t *testing.T) {
 	}
 }
 
+func TestHubBroadcastToRole(t *testing.T) {
+	hub := NewHub()
+	mock := &mockSessionClient{}
+
+	// 同一会话：用户端 + 坐席端两个连接（角色不同）。
+	user := NewClientWithRole("s1", nil, hub, mock, "user")
+	agent := NewClientWithRole("s1", nil, hub, mock, "agent")
+	t.Cleanup(func() { hub.Unregister(user); hub.Unregister(agent) })
+
+	if user.Role() != "user" || agent.Role() != "agent" {
+		t.Fatalf("角色访问器不符: user=%s agent=%s", user.Role(), agent.Role())
+	}
+
+	// 向坐席端广播：仅 agent 连接收到，user 连接绝不收到（防 AI 草稿泄漏给用户）。
+	hub.BroadcastToRole("s1", "agent", &Envelope{Type: MsgTypeSuggest, Suggestions: []string{"候选"}})
+
+	got := <-agent.send
+	if got.Type != MsgTypeSuggest || len(got.Suggestions) != 1 || got.Suggestions[0] != "候选" {
+		t.Fatalf("坐席端应收到建议信封: %+v", got)
+	}
+	select {
+	case leak := <-user.send:
+		t.Fatalf("用户端不应收到建议（防泄漏）: %+v", leak)
+	default:
+	}
+
+	// 向用户端广播：仅 user 连接收到。
+	hub.BroadcastToRole("s1", "user", &Envelope{Type: MsgTypeChat, Seq: 1})
+	if got := <-user.send; got.Seq != 1 {
+		t.Fatalf("用户端应收到广播: %+v", got)
+	}
+	select {
+	case extra := <-agent.send:
+		t.Fatalf("坐席端不应收到用户端广播: %+v", extra)
+	default:
+	}
+
+	// 未注册会话广播应无副作用（不 panic）。
+	hub.BroadcastToRole("unknown", "agent", &Envelope{Type: MsgTypeSuggest})
+}
+
 func TestBufferAppendAndAfter(t *testing.T) {
 	hub := NewHub()
 	c := newTestClient(t, hub, &mockSessionClient{})

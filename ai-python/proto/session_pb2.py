@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rsession.proto\x12\x11lingxi.session.v1\"K\n\x14\x43reateSessionRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x0f\n\x07\x63hannel\x18\x02 \x01(\t\x12\x11\n\ttenant_id\x18\x03 \x01(\t\"[\n\x15\x43reateSessionResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12.\n\x05state\x18\x02 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\"\\\n\x12SendMessageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06sender\x18\x02 \x01(\t\x12\x11\n\tsender_id\x18\x03 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x04 \x01(\t\"L\n\x13SendMessageResponse\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12\x0b\n\x03seq\x18\x02 \x01(\x03\x12\x14\n\x0ctimestamp_ms\x18\x03 \x01(\x03\"\x8f\x01\n\x0eSessionMessage\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x0e\n\x06sender\x18\x03 \x01(\t\x12\x11\n\tsender_id\x18\x04 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x05 \x01(\t\x12\x0b\n\x03seq\x18\x06 \x01(\x03\x12\x14\n\x0ctimestamp_ms\x18\x07 \x01(\x03\"q\n\x12\x43hangeStateRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x35\n\x0ctarget_state\x18\x02 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\x12\x10\n\x08operator\x18\x03 \x01(\t\"i\n\x13\x43hangeStateResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x36\n\rcurrent_state\x18\x03 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\"J\n\x13PullMessagesRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x10\n\x08last_seq\x18\x02 \x01(\x03\x12\r\n\x05limit\x18\x03 \x01(\x05\"]\n\x14PullMessagesResponse\x12\x33\n\x08messages\x18\x01 \x03(\x0b\x32!.lingxi.session.v1.SessionMessage\x12\x10\n\x08has_more\x18\x02 \x01(\x08\"\xbc\x01\n\x0eSessionSummary\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12.\n\x05state\x18\x03 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\x12\x10\n\x08\x61gent_id\x18\x04 \x01(\t\x12\x15\n\rcreated_at_ms\x18\x05 \x01(\x03\x12\x15\n\rupdated_at_ms\x18\x06 \x01(\x03\x12\x15\n\rmessage_count\x18\x07 \x01(\x05\"+\n\x1aListWaitingSessionsRequest\x12\r\n\x05limit\x18\x01 \x01(\x05\"R\n\x1bListWaitingSessionsResponse\x12\x33\n\x08sessions\x18\x01 \x03(\x0b\x32!.lingxi.session.v1.SessionSummary\"7\n\x0fTakeOverRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x10\n\x08\x61gent_id\x18\x02 \x01(\t\"^\n\x10TakeOverResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12.\n\x05state\x18\x03 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\",\n\x18ListAgentSessionsRequest\x12\x10\n\x08\x61gent_id\x18\x01 \x01(\t\"P\n\x19ListAgentSessionsResponse\x12\x33\n\x08sessions\x18\x01 \x03(\x0b\x32!.lingxi.session.v1.SessionSummary*b\n\x0cSessionState\x12\x1d\n\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x08\n\x04INIT\x10\x01\x12\x0e\n\nHUMAN_CHAT\x10\x02\x12\n\n\x06\x43LOSED\x10\x03\x12\r\n\tAI_ACTIVE\x10\x04\x32\xcc\x05\n\x0eSessionService\x12\x62\n\rCreateSession\x12\'.lingxi.session.v1.CreateSessionRequest\x1a(.lingxi.session.v1.CreateSessionResponse\x12\\\n\x0bSendMessage\x12%.lingxi.session.v1.SendMessageRequest\x1a&.lingxi.session.v1.SendMessageResponse\x12\\\n\x0b\x43hangeState\x12%.lingxi.session.v1.ChangeStateRequest\x1a&.lingxi.session.v1.ChangeStateResponse\x12_\n\x0cPullMessages\x12&.lingxi.session.v1.PullMessagesRequest\x1a\'.lingxi.session.v1.PullMessagesResponse\x12t\n\x13ListWaitingSessions\x12-.lingxi.session.v1.ListWaitingSessionsRequest\x1a..lingxi.session.v1.ListWaitingSessionsResponse\x12S\n\x08TakeOver\x12\".lingxi.session.v1.TakeOverRequest\x1a#.lingxi.session.v1.TakeOverResponse\x12n\n\x11ListAgentSessions\x12+.lingxi.session.v1.ListAgentSessionsRequest\x1a,.lingxi.session.v1.ListAgentSessionsResponseB.Z,github.com/lingxi/gateway-go/proto/sessionv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rsession.proto\x12\x11lingxi.session.v1\"K\n\x14\x43reateSessionRequest\x12\x0f\n\x07user_id\x18\x01 \x01(\t\x12\x0f\n\x07\x63hannel\x18\x02 \x01(\t\x12\x11\n\ttenant_id\x18\x03 \x01(\t\"[\n\x15\x43reateSessionResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12.\n\x05state\x18\x02 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\"\\\n\x12SendMessageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06sender\x18\x02 \x01(\t\x12\x11\n\tsender_id\x18\x03 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x04 \x01(\t\"L\n\x13SendMessageResponse\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12\x0b\n\x03seq\x18\x02 \x01(\x03\x12\x14\n\x0ctimestamp_ms\x18\x03 \x01(\x03\"\x8f\x01\n\x0eSessionMessage\x12\x12\n\nmessage_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x0e\n\x06sender\x18\x03 \x01(\t\x12\x11\n\tsender_id\x18\x04 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x05 \x01(\t\x12\x0b\n\x03seq\x18\x06 \x01(\x03\x12\x14\n\x0ctimestamp_ms\x18\x07 \x01(\x03\"q\n\x12\x43hangeStateRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x35\n\x0ctarget_state\x18\x02 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\x12\x10\n\x08operator\x18\x03 \x01(\t\"i\n\x13\x43hangeStateResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12\x36\n\rcurrent_state\x18\x03 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\"J\n\x13PullMessagesRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x10\n\x08last_seq\x18\x02 \x01(\x03\x12\r\n\x05limit\x18\x03 \x01(\x05\"]\n\x14PullMessagesResponse\x12\x33\n\x08messages\x18\x01 \x03(\x0b\x32!.lingxi.session.v1.SessionMessage\x12\x10\n\x08has_more\x18\x02 \x01(\x08\"\xcd\x01\n\x0eSessionSummary\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07user_id\x18\x02 \x01(\t\x12.\n\x05state\x18\x03 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\x12\x10\n\x08\x61gent_id\x18\x04 \x01(\t\x12\x15\n\rcreated_at_ms\x18\x05 \x01(\x03\x12\x15\n\rupdated_at_ms\x18\x06 \x01(\x03\x12\x15\n\rmessage_count\x18\x07 \x01(\x05\x12\x0f\n\x07summary\x18\x08 \x01(\t\"+\n\x1aListWaitingSessionsRequest\x12\r\n\x05limit\x18\x01 \x01(\x05\"R\n\x1bListWaitingSessionsResponse\x12\x33\n\x08sessions\x18\x01 \x03(\x0b\x32!.lingxi.session.v1.SessionSummary\"7\n\x0fTakeOverRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x10\n\x08\x61gent_id\x18\x02 \x01(\t\"^\n\x10TakeOverResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x0e\n\x06reason\x18\x02 \x01(\t\x12.\n\x05state\x18\x03 \x01(\x0e\x32\x1f.lingxi.session.v1.SessionState\",\n\x18ListAgentSessionsRequest\x12\x10\n\x08\x61gent_id\x18\x01 \x01(\t\"P\n\x19ListAgentSessionsResponse\x12\x33\n\x08sessions\x18\x01 \x03(\x0b\x32!.lingxi.session.v1.SessionSummary\"z\n\x15SuggestRepliesRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x10\n\x08\x61gent_id\x18\x03 \x01(\t\x12\x0e\n\x06intent\x18\x04 \x01(\t\x12\x17\n\x0fmax_suggestions\x18\x05 \x01(\x05\"\xb2\x01\n\x16SuggestRepliesResponse\x12\n\n\x02ok\x18\x01 \x01(\x08\x12\x10\n\x08\x64\x65graded\x18\x02 \x01(\x08\x12\x16\n\x0e\x64\x65grade_reason\x18\x03 \x01(\t\x12\x0e\n\x06queued\x18\x04 \x01(\x08\x12\x12\n\nrequest_id\x18\x05 \x01(\t\x12\x13\n\x0bsuggestions\x18\x06 \x03(\t\x12\x12\n\nelapsed_ms\x18\x07 \x01(\x03\x12\x15\n\rhistory_count\x18\x08 \x01(\x05*u\n\x0cSessionState\x12\x1d\n\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x08\n\x04INIT\x10\x01\x12\x0e\n\nHUMAN_CHAT\x10\x02\x12\n\n\x06\x43LOSED\x10\x03\x12\r\n\tAI_ACTIVE\x10\x04\x12\x11\n\rWAITING_HUMAN\x10\x05\x32\xb3\x06\n\x0eSessionService\x12\x62\n\rCreateSession\x12\'.lingxi.session.v1.CreateSessionRequest\x1a(.lingxi.session.v1.CreateSessionResponse\x12\\\n\x0bSendMessage\x12%.lingxi.session.v1.SendMessageRequest\x1a&.lingxi.session.v1.SendMessageResponse\x12\\\n\x0b\x43hangeState\x12%.lingxi.session.v1.ChangeStateRequest\x1a&.lingxi.session.v1.ChangeStateResponse\x12_\n\x0cPullMessages\x12&.lingxi.session.v1.PullMessagesRequest\x1a\'.lingxi.session.v1.PullMessagesResponse\x12t\n\x13ListWaitingSessions\x12-.lingxi.session.v1.ListWaitingSessionsRequest\x1a..lingxi.session.v1.ListWaitingSessionsResponse\x12S\n\x08TakeOver\x12\".lingxi.session.v1.TakeOverRequest\x1a#.lingxi.session.v1.TakeOverResponse\x12n\n\x11ListAgentSessions\x12+.lingxi.session.v1.ListAgentSessionsRequest\x1a,.lingxi.session.v1.ListAgentSessionsResponse\x12\x65\n\x0eSuggestReplies\x12(.lingxi.session.v1.SuggestRepliesRequest\x1a).lingxi.session.v1.SuggestRepliesResponseB.Z,github.com/lingxi/gateway-go/proto/sessionv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,8 +32,8 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'session_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'Z,github.com/lingxi/gateway-go/proto/sessionv1'
-  _globals['_SESSIONSTATE']._serialized_start=1518
-  _globals['_SESSIONSTATE']._serialized_end=1616
+  _globals['_SESSIONSTATE']._serialized_start=1840
+  _globals['_SESSIONSTATE']._serialized_end=1957
   _globals['_CREATESESSIONREQUEST']._serialized_start=36
   _globals['_CREATESESSIONREQUEST']._serialized_end=111
   _globals['_CREATESESSIONRESPONSE']._serialized_start=113
@@ -53,19 +53,23 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_PULLMESSAGESRESPONSE']._serialized_start=822
   _globals['_PULLMESSAGESRESPONSE']._serialized_end=915
   _globals['_SESSIONSUMMARY']._serialized_start=918
-  _globals['_SESSIONSUMMARY']._serialized_end=1106
-  _globals['_LISTWAITINGSESSIONSREQUEST']._serialized_start=1108
-  _globals['_LISTWAITINGSESSIONSREQUEST']._serialized_end=1151
-  _globals['_LISTWAITINGSESSIONSRESPONSE']._serialized_start=1153
-  _globals['_LISTWAITINGSESSIONSRESPONSE']._serialized_end=1235
-  _globals['_TAKEOVERREQUEST']._serialized_start=1237
-  _globals['_TAKEOVERREQUEST']._serialized_end=1292
-  _globals['_TAKEOVERRESPONSE']._serialized_start=1294
-  _globals['_TAKEOVERRESPONSE']._serialized_end=1388
-  _globals['_LISTAGENTSESSIONSREQUEST']._serialized_start=1390
-  _globals['_LISTAGENTSESSIONSREQUEST']._serialized_end=1434
-  _globals['_LISTAGENTSESSIONSRESPONSE']._serialized_start=1436
-  _globals['_LISTAGENTSESSIONSRESPONSE']._serialized_end=1516
-  _globals['_SESSIONSERVICE']._serialized_start=1619
-  _globals['_SESSIONSERVICE']._serialized_end=2335
+  _globals['_SESSIONSUMMARY']._serialized_end=1123
+  _globals['_LISTWAITINGSESSIONSREQUEST']._serialized_start=1125
+  _globals['_LISTWAITINGSESSIONSREQUEST']._serialized_end=1168
+  _globals['_LISTWAITINGSESSIONSRESPONSE']._serialized_start=1170
+  _globals['_LISTWAITINGSESSIONSRESPONSE']._serialized_end=1252
+  _globals['_TAKEOVERREQUEST']._serialized_start=1254
+  _globals['_TAKEOVERREQUEST']._serialized_end=1309
+  _globals['_TAKEOVERRESPONSE']._serialized_start=1311
+  _globals['_TAKEOVERRESPONSE']._serialized_end=1405
+  _globals['_LISTAGENTSESSIONSREQUEST']._serialized_start=1407
+  _globals['_LISTAGENTSESSIONSREQUEST']._serialized_end=1451
+  _globals['_LISTAGENTSESSIONSRESPONSE']._serialized_start=1453
+  _globals['_LISTAGENTSESSIONSRESPONSE']._serialized_end=1533
+  _globals['_SUGGESTREPLIESREQUEST']._serialized_start=1535
+  _globals['_SUGGESTREPLIESREQUEST']._serialized_end=1657
+  _globals['_SUGGESTREPLIESRESPONSE']._serialized_start=1660
+  _globals['_SUGGESTREPLIESRESPONSE']._serialized_end=1838
+  _globals['_SESSIONSERVICE']._serialized_start=1960
+  _globals['_SESSIONSERVICE']._serialized_end=2779
 # @@protoc_insertion_point(module_scope)
