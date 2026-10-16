@@ -33,14 +33,51 @@ public class Session {
     /** 摘要长度上限（字符），超出截断，避免异常大字段随事件传输。 */
     private static final int MAX_SUMMARY_LEN = 2000;
 
+    /**
+     * 已落库的消息条数（M5-5.7 持久化）：SQL 列表查询只取会话行、不回表读消息，
+     * 故以该值兜底 {@link #messageCount()}，避免列表显示 0 条。
+     */
+    private int persistedMessageCount;
+
+    /** 新建会话（id 由聚合生成，状态 INIT）。 */
     public Session(String tenantId, String userId, String channel) {
-        this.id = UUID.randomUUID().toString();
+        this(UUID.randomUUID().toString(), tenantId, userId, channel, Instant.now());
+        this.updatedAt = this.createdAt;
+        this.state = State.INIT;
+    }
+
+    private Session(String id, String tenantId, String userId, String channel, Instant createdAt) {
+        this.id = id;
         this.tenantId = tenantId;
         this.userId = userId;
         this.channel = channel;
-        this.createdAt = Instant.now();
-        this.updatedAt = this.createdAt;
-        this.state = State.INIT;
+        this.createdAt = createdAt;
+    }
+
+    /**
+     * 由存储层重建聚合（M5-5.7 持久化）：恢复状态、摘要、时间戳与消息序列。
+     *
+     * <p>列表类查询不传 {@code messages}（避免回表读全部消息），此时
+     * {@code messageCount} 决定 {@link #messageCount()} 的返回值。</p>
+     *
+     * @param messages 有序消息（按 seq 升序）；不加载时为 null 或空列表
+     */
+    public static Session restore(String id, String tenantId, String userId, String channel,
+                                  State state, String agentId, String summary,
+                                  long createdAtMs, long updatedAtMs, int messageCount,
+                                  List<SessionMessage> messages) {
+        Session session = new Session(id, tenantId, userId, channel, Instant.ofEpochMilli(createdAtMs));
+        session.state = state;
+        session.agentId = agentId;
+        session.summary = summary == null ? "" : summary;
+        session.updatedAt = Instant.ofEpochMilli(updatedAtMs);
+        session.persistedMessageCount = messageCount;
+        if (messages != null && !messages.isEmpty()) {
+            session.messages.addAll(messages);
+            // seq 单调：下一序号取已存消息最大 seq + 1（新会话从 1 开始）
+            session.nextSeq = messages.stream().mapToLong(SessionMessage::seq).max().orElse(0L) + 1;
+        }
+        return session;
     }
 
     public synchronized void changeState(State target) {
@@ -186,7 +223,15 @@ public class Session {
     }
 
     public synchronized int messageCount() {
-        return messages.size();
+        // 已加载消息时以实际条数为准；列表轻量查询（未回表读消息）时用落库条数兜底
+        return messages.isEmpty() ? persistedMessageCount : messages.size();
+    }
+
+    /**
+     * 全量消息快照（落库/测试用），返回不可变副本，避免外部改动内部消息序列。
+     */
+    public synchronized List<SessionMessage> messageSnapshot() {
+        return List.copyOf(messages);
     }
 
     /**

@@ -1,0 +1,154 @@
+# 灵犀智能平台 —— 私有化离线交付包 版本与资产清单（M5-5.4）
+#
+# 本文件是**唯一事实来源**：scripts/build-offline-bundle.sh（打包收集）与
+# deploy/offline/install-offline.sh（部署校验）均直接解析本文件，请勿改成多行嵌套风格。
+#
+# 格式约定（行式扁平，便于 bash 解析；解析实现见 deploy/offline/lib/common.sh）：
+#   components: 下每个组件以 "  - name: <组件名>" 开始，随后每行 "    <字段>: <值>"
+#     kind     : artifact(本地构建产物) | middleware(外部中间件)
+#     required : true | false                     —— 必需项缺失/不可达时 install 判定为「失败」
+#     port     : 监听端口（0 = 无固定端口）
+#     version  : 版本标识（外部中间件为探测版本，业务组件取自各工程 package/pom）
+#     health   : 就绪探测目标：http URL | tcp:<端口> | 空
+#     probe    : install 阶段的探测方式：http | tcp | bin | jar | dir | dist | file | skip
+#     artifact : kind=artifact 时的仓库内相对路径（打包按此收集；bundle 内保持同构路径）
+#     env      : 必需环境变量名（逗号分隔；空写 ""）
+version: "1.0.0"
+
+components:
+  # ---------- 中间件（外部依赖：目标机需预先就绪，本包不提供其安装介质） ----------
+  - name: mysql
+    kind: middleware
+    required: true
+    port: 3306
+    version: "8.x"
+    health: "tcp:3306"
+    probe: tcp
+    artifact: ""
+    env: "LINGXI_DB_URL,LINGXI_DB_USER,LINGXI_DB_PASSWORD"
+  - name: redis
+    kind: middleware
+    required: true
+    port: 6379
+    version: "3.x+"
+    health: "tcp:6379"
+    probe: tcp
+    artifact: ""
+    env: "LINGXI_REDIS_HOST,LINGXI_REDIS_PORT"
+  - name: kafka
+    kind: middleware
+    required: false
+    port: 9092
+    version: "4.x(KRaft)"
+    health: "tcp:9092"
+    probe: tcp
+    artifact: ""
+    env: "LINGXI_KAFKA_BOOTSTRAP_SERVERS"
+  - name: milvus
+    kind: middleware
+    required: false
+    port: 19530
+    version: "2.6.18"
+    health: "tcp:19530"
+    probe: tcp
+    artifact: ""
+    env: "LINGXI_MILVUS_URI"
+  - name: minio
+    kind: middleware
+    required: false
+    port: 9000
+    version: "RELEASE.2024-12-18T13-15-44Z"
+    health: "http://127.0.0.1:9000/minio/health/live"
+    probe: http
+    artifact: ""
+    env: "LINGXI_KB_MINIO_ENDPOINT,LINGXI_KB_MINIO_ACCESS_KEY,LINGXI_KB_MINIO_SECRET_KEY"
+  # Nacos 仅作注册中心占位：core-java 当前配置未引用它，故标为非必需
+  - name: nacos
+    kind: middleware
+    required: false
+    port: 8848
+    version: "2.x"
+    health: "http://127.0.0.1:8848/nacos"
+    probe: http
+    artifact: ""
+    env: ""
+
+  # ---------- 业务组件（本包内自带产物，bundle 内保持仓库同构路径） ----------
+  - name: gateway-go
+    kind: artifact
+    required: true
+    port: 8080
+    version: "1.0.0"
+    health: "http://127.0.0.1:8080/api/v1/health"
+    probe: bin
+    artifact: "gateway-go/bin/gateway"
+    env: "LINGXI_JWT_SECRET,GATEWAY_JWT_SECRET,GATEWAY_DEFAULT_TENANT"
+  - name: core-java
+    kind: artifact
+    required: true
+    port: 8081
+    version: "1.0.0-SNAPSHOT"
+    health: "http://127.0.0.1:8081/actuator/health"
+    probe: jar
+    artifact: "core-java/start/target/lingxi-start-1.0.0-SNAPSHOT.jar"
+    env: "LINGXI_JWT_SECRET,LINGXI_ADMIN_INIT_PASSWORD,LINGXI_DB_URL"
+  - name: ai-python
+    kind: artifact
+    required: true
+    port: 8082
+    version: "1.0.0"
+    health: "http://127.0.0.1:8082/health"
+    probe: dir
+    artifact: "ai-python"
+    env: "LINGXI_DEEPSEEK_API_KEY,LINGXI_MILVUS_URI,LINGXI_DENSE_EMBED_API_KEY"
+  - name: web-vue3
+    kind: artifact
+    required: true
+    port: 3000
+    version: "1.0.0"
+    health: "http://localhost:3000/"
+    probe: dist
+    artifact: "web-vue3/dist"
+    env: ""
+  - name: schema
+    kind: artifact
+    required: false
+    port: 0
+    version: "-"
+    health: ""
+    probe: file
+    artifact: "core-java/start/src/main/resources/schema.sql"
+    env: ""
+
+# ---------- 随包附带目录/文件（按 src → dest 复制；optional=true 时缺失仅记录不判失败） ----------
+assets:
+  - src: scripts
+    dest: scripts
+    optional: false
+  - src: deploy
+    dest: deploy
+    optional: false
+  - src: docs
+    dest: docs
+    optional: false
+  - src: ops
+    dest: ops
+    optional: true
+  - src: deploy/offline/lib
+    dest: lib
+    optional: false
+  - src: deploy/offline/config/.env.example
+    dest: config/.env.example
+    optional: false
+  - src: deploy/offline/config/nginx.conf.example
+    dest: config/nginx.conf.example
+    optional: true
+  - src: deploy/offline/docker-compose.offline.yml
+    dest: docker-compose.offline.yml
+    optional: false
+  - src: deploy/offline/manifest.yaml
+    dest: manifest.yaml
+    optional: false
+  - src: deploy/offline/install-offline.sh
+    dest: install-offline.sh
+    optional: false

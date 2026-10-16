@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/lingxi/gateway-go/internal/tenant"
 	sessionv1 "github.com/lingxi/gateway-go/proto/sessionv1"
 )
 
@@ -21,18 +23,34 @@ type mockSessionClient struct {
 	createFn func(userID, channel, tenantID string) (string, error)
 	sendFn   func(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error)
 	pullFn   func(sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error)
+	listFn   func(limit int32) ([]*sessionv1.SessionListItem, error)
 }
 
-func (m *mockSessionClient) CreateSession(userID, channel, tenantID string) (string, error) {
+func (m *mockSessionClient) ListSessionsByUser(_ context.Context, limit int32) ([]*sessionv1.SessionListItem, error) {
+	if m.listFn == nil {
+		return nil, nil
+	}
+	return m.listFn(limit)
+}
+
+func (m *mockSessionClient) CreateSession(ctx context.Context, userID, channel, tenantID string) (string, error) {
 	return m.createFn(userID, channel, tenantID)
 }
 
-func (m *mockSessionClient) SendMessage(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error) {
+func (m *mockSessionClient) SendMessage(ctx context.Context, sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error) {
 	return m.sendFn(sessionID, sender, senderID, content)
 }
 
-func (m *mockSessionClient) PullMessages(sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error) {
+func (m *mockSessionClient) PullMessages(ctx context.Context, sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error) {
 	return m.pullFn(sessionID, lastSeq, limit)
+}
+
+// withTestTenant 注入测试用可信租户身份，模拟鉴权中间件（M5-5.5）。
+func withTestTenant(tenantID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenant.SetToGin(c, tenant.Identity{TenantID: tenantID, UserID: "u1", Role: "user"})
+		c.Next()
+	}
 }
 
 // newTestClient 构造测试用 Client（不启动读写循环，仅测纯逻辑）。
@@ -309,10 +327,82 @@ func TestHandleResume(t *testing.T) {
 	})
 }
 
+// ListSessions：历史会话列表——身份取可信上下文、状态枚举转可读名、limit 收敛、缺身份 401。
+func TestListSessions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	hub := NewHub()
+
+	var seenLimit int32
+	mock := &mockSessionClient{
+		listFn: func(limit int32) ([]*sessionv1.SessionListItem, error) {
+			seenLimit = limit
+			return []*sessionv1.SessionListItem{{
+				SessionId:      "s-1",
+				UserId:         "u1",
+				Channel:        "web",
+				State:          sessionv1.SessionState_WAITING_HUMAN,
+				CreatedAtMs:    1000,
+				LastActiveAtMs: 2000,
+				MessageCount:   3,
+				LastPreview:    "退款多久能到账？",
+			}}, nil
+		},
+	}
+	h := NewHandler(hub, mock)
+
+	newRouter := func(withIdentity bool) *gin.Engine {
+		router := gin.New()
+		if withIdentity {
+			router.Use(withTestTenant("tenant-ctx"))
+		}
+		router.GET("/api/v1/sessions", h.ListSessions)
+		return router
+	}
+
+	t.Run("返回会话列表且状态为可读名", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		newRouter(true).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("状态码不符: %d", w.Code)
+		}
+		body := w.Body.String()
+		// 枚举必须以名字下发（前端按 AI_ACTIVE / WAITING_HUMAN 渲染标签）
+		for _, want := range []string{"s-1", "WAITING_HUMAN", "退款多久能到账？"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("响应缺少 %q: %s", want, body)
+			}
+		}
+	})
+
+	t.Run("limit 上界收敛为50", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		newRouter(true).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions?limit=200", nil))
+		if seenLimit != 50 {
+			t.Fatalf("limit 应收敛为 50，实际 %d", seenLimit)
+		}
+	})
+
+	t.Run("limit 非法回落缺省20", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		newRouter(true).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions?limit=abc", nil))
+		if seenLimit != 20 {
+			t.Fatalf("非法 limit 应回落 20，实际 %d", seenLimit)
+		}
+	})
+
+	t.Run("缺租户上下文返回401", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		newRouter(false).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("缺身份应 401，实际 %d", w.Code)
+		}
+	})
+}
+
 func TestCreateSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	hub := NewHub()
-	// 记录建会话时实际注入的租户，验证「请求体缺 tenant_id 时回落默认租户」
+	// 记录建会话时实际注入的租户，验证「租户一律取可信上下文」
 	var seenTenant string
 	mock := &mockSessionClient{
 		createFn: func(userID, channel, tenantID string) (string, error) {
@@ -320,12 +410,13 @@ func TestCreateSession(t *testing.T) {
 			return "session-" + userID, nil
 		},
 	}
-	h := NewHandler(hub, mock, "lingxi")
+	h := NewHandler(hub, mock)
 
 	router := gin.New()
+	router.Use(withTestTenant("tenant-ctx"))
 	router.POST("/api/v1/session", h.CreateSession)
 
-	t.Run("正常创建", func(t *testing.T) {
+	t.Run("以可信上下文租户建会话", func(t *testing.T) {
 		body := strings.NewReader(`{"user_id":"u1"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/session", body)
 		req.Header.Set("Content-Type", "application/json")
@@ -342,13 +433,13 @@ func TestCreateSession(t *testing.T) {
 		if resp["session_id"] != "session-u1" {
 			t.Fatalf("session_id 不符: %+v", resp)
 		}
-		if seenTenant != "lingxi" {
-			t.Fatalf("缺 tenant_id 时应回落默认租户，实际 %q", seenTenant)
+		if seenTenant != "tenant-ctx" {
+			t.Fatalf("租户应取可信上下文，实际 %q", seenTenant)
 		}
 	})
 
-	t.Run("显式租户透传", func(t *testing.T) {
-		body := strings.NewReader(`{"user_id":"u2","tenant_id":"tenant-x"}`)
+	t.Run("请求体租户与身份一致时透传上下文租户", func(t *testing.T) {
+		body := strings.NewReader(`{"user_id":"u2","tenant_id":"tenant-ctx"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/session", body)
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -357,8 +448,21 @@ func TestCreateSession(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("应返回 200，实际 %d: %s", w.Code, w.Body.String())
 		}
-		if seenTenant != "tenant-x" {
-			t.Fatalf("显式 tenant_id 应原样透传，实际 %q", seenTenant)
+		if seenTenant != "tenant-ctx" {
+			t.Fatalf("一致请求体租户仍以上下文为准，实际 %q", seenTenant)
+		}
+	})
+
+	t.Run("伪造租户被拒", func(t *testing.T) {
+		// M5-5.5：请求体租户与可信上下文不一致 → 403（不再静默采信请求体）
+		body := strings.NewReader(`{"user_id":"u3","tenant_id":"tenant-other"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/session", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("伪造租户应返回 403，实际 %d", w.Code)
 		}
 	})
 
@@ -383,9 +487,10 @@ func TestPushAgentReply(t *testing.T) {
 			return &sessionv1.SendMessageResponse{Seq: 7, MessageId: "m7"}, nil
 		},
 	}
-	h := NewHandler(hub, mock, "lingxi")
+	h := NewHandler(hub, mock)
 
 	router := gin.New()
+	router.Use(withTestTenant("tenant-ctx"))
 	router.POST("/api/v1/agent/reply", h.PushAgentReply)
 
 	t.Run("正常回复", func(t *testing.T) {

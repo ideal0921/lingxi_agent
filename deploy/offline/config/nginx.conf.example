@@ -1,0 +1,47 @@
+# 灵犀前端静态托管 + 网关反向代理样例（nginx.conf.example）
+#
+# 使用场景：离线目标机不做前端 Vite dev server（无 node_modules），改为用 nginx 托管
+# 交付包内的 web-vue3/dist，并把 /api 与 /ws 反代到 Go 网关（:8080）。
+#
+# 使用：替换 <INSTALL_DIR> 为实际安装目录（默认 /opt/lingxi），另存为
+#   /etc/nginx/conf.d/lingxi.conf，然后 nginx -t && nginx -s reload
+# 未验证：本机未安装/未用 nginx 实际加载过本配置，仅按 Vite 代理语义编写。
+
+server {
+    listen       3000;                 # 与交付清单中 web-vue3 的端口一致
+    server_name  _;
+
+    root  <INSTALL_DIR>/web-vue3/dist;
+    index index.html;
+
+    # 单页应用：非静态资源回退到 index.html
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 静态资源缓存（Vite 产物带内容哈希，可长缓存）
+    location /assets/ {
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # REST API 反代到网关
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;           # SSE/长轮询需放宽
+    }
+
+    # WebSocket 反代（SSE 流式对话走 /ws）
+    location /ws {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host       $host;
+        proxy_read_timeout 3600s;
+    }
+}

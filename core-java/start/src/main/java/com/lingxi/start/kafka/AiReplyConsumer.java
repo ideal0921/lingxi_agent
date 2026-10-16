@@ -1,5 +1,7 @@
 package com.lingxi.start.kafka;
 
+import java.time.Instant;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -68,8 +70,11 @@ public class AiReplyConsumer {
             log.debug("AI 回答已落库，跳过重复事件 sessionId={} messageId={}", sessionId, messageId);
             return false;
         }
-        SessionMessage saved = session.appendMessage("agent", "ai", content, messageId);
-        log.info("AI 回答已落库 sessionId={} messageId={} seq={}", sessionId, messageId, saved.seq());
+        // M5-5.7：助手消息交存储侧追加并取回**权威 seq**（与并发用户消息共享同一行锁分配，
+        // 不再用聚合算出的 seq，否则同时到达的用户消息与 AI 回复会覆盖丢一条）
+        int seq = sessionRepository.appendMessage(sessionId, new SessionMessage(
+                messageId, sessionId, "agent", "ai", content, 0L, Instant.now()));
+        log.info("AI 回答已落库 sessionId={} messageId={} seq={}", sessionId, messageId, seq);
         // M5-5.1 分析埋点：AI 应答（漏斗阶段，聚合侧取最早 = 首次应答）
         analyticsPublisher.publishLifecycle(session.getId(), session.getTenantId(),
                 AnalyticsEventPublisher.STAGE_AI_REPLIED, session.getChannel(),

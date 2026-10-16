@@ -11,6 +11,9 @@ import (
 )
 
 // SessionService 会话域 gRPC 客户端：网关调用 Java 会话域的封装。
+//
+// M5-5.5：所有方法首参为调用方上下文，Java 侧据此从 metadata 读取可信租户；
+// 上下文由处理器用 tenant.ClientContext(c) 构造（携带 x-tenant-id/x-user-id/x-role）。
 type SessionService struct {
 	conn   *grpc.ClientConn
 	client sessionv1.SessionServiceClient
@@ -30,10 +33,9 @@ func NewSessionService(addr string) (*SessionService, error) {
 	}, nil
 }
 
-// CreateSession 建会话。tenantID 由接入层注入（网关默认租户或鉴权中间件解析结果），
-// Java 会话域据此为会话打上租户，后续消息/埋点事件均继承该租户。
-func (s *SessionService) CreateSession(userID, channel, tenantID string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// CreateSession 建会话：租户以 metadata 中的可信租户为准，tenantID 仅为兼容字段。
+func (s *SessionService) CreateSession(ctx context.Context, userID, channel, tenantID string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.CreateSession(ctx, &sessionv1.CreateSessionRequest{
 		UserId: userID, Channel: channel, TenantId: tenantID,
@@ -45,8 +47,8 @@ func (s *SessionService) CreateSession(userID, channel, tenantID string) (string
 }
 
 // SendMessage 发送消息，返回 seq 等。
-func (s *SessionService) SendMessage(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *SessionService) SendMessage(ctx context.Context, sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return s.client.SendMessage(ctx, &sessionv1.SendMessageRequest{
 		SessionId: sessionID, Sender: sender, SenderId: senderID, Content: content,
@@ -54,8 +56,8 @@ func (s *SessionService) SendMessage(sessionID, sender, senderID, content string
 }
 
 // PullMessages 断连续传：拉取 lastSeq 之后的遗漏消息。
-func (s *SessionService) PullMessages(sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *SessionService) PullMessages(ctx context.Context, sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.PullMessages(ctx, &sessionv1.PullMessagesRequest{
 		SessionId: sessionID, LastSeq: lastSeq, Limit: limit,
@@ -66,9 +68,9 @@ func (s *SessionService) PullMessages(sessionID string, lastSeq int64, limit int
 	return resp.Messages, nil
 }
 
-// ListWaitingSessions 客服队列：待接管会话列表。
-func (s *SessionService) ListWaitingSessions(limit int32) ([]*sessionv1.SessionSummary, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// ListWaitingSessions 客服队列：待接管会话列表（Java 侧按调用方租户过滤）。
+func (s *SessionService) ListWaitingSessions(ctx context.Context, limit int32) ([]*sessionv1.SessionSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.ListWaitingSessions(ctx, &sessionv1.ListWaitingSessionsRequest{Limit: limit})
 	if err != nil {
@@ -77,9 +79,9 @@ func (s *SessionService) ListWaitingSessions(limit int32) ([]*sessionv1.SessionS
 	return resp.Sessions, nil
 }
 
-// TakeOver 客服接管：并发抢单由 Java 会话域保证仅成功一次。
-func (s *SessionService) TakeOver(sessionID, agentID string) (*sessionv1.TakeOverResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// TakeOver 客服接管：并发抢单由 Java 会话域保证仅成功一次（含租户归属校验）。
+func (s *SessionService) TakeOver(ctx context.Context, sessionID, agentID string) (*sessionv1.TakeOverResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return s.client.TakeOver(ctx, &sessionv1.TakeOverRequest{SessionId: sessionID, AgentId: agentID})
 }
@@ -92,9 +94,9 @@ func (s *SessionService) SuggestReplies(ctx context.Context, req *sessionv1.Sugg
 	return s.client.SuggestReplies(ctx, req)
 }
 
-// ListAgentSessions 指定坐席的会话列表。
-func (s *SessionService) ListAgentSessions(agentID string) ([]*sessionv1.SessionSummary, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// ListAgentSessions 指定坐席的会话列表（Java 侧按调用方租户过滤）。
+func (s *SessionService) ListAgentSessions(ctx context.Context, agentID string) ([]*sessionv1.SessionSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.ListAgentSessions(ctx, &sessionv1.ListAgentSessionsRequest{AgentId: agentID})
 	if err != nil {
@@ -103,11 +105,26 @@ func (s *SessionService) ListAgentSessions(agentID string) ([]*sessionv1.Session
 	return resp.Sessions, nil
 }
 
+// ListSessionsByUser 列「我」的历史会话（按最近活跃倒序）。
+//
+// 租户与用户均取自调用方上下文 metadata，**请求体不含 user_id/tenant_id**——
+// 否则可借参数枚举他人会话（与 M5-5.5 的租户隔离约定一致）。
+func (s *SessionService) ListSessionsByUser(ctx context.Context, limit int32) ([]*sessionv1.SessionListItem, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := s.client.ListSessionsByUser(ctx, &sessionv1.ListSessionsByUserRequest{Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Sessions, nil
+}
+
 // SubmitFeedback 提交会话满意度评价（M5-5.1）。
-// 租户/用户由 Java 会话域按会话解析，故前端不得传 tenant_id（防跨租户伪造）。
+// 租户/用户由 Java 会话域按会话解析，故前端不得传 tenant_id（防跨租户伪造）；
+// Java 侧另校验会话是否归属调用方租户（M5-5.5）。
 // 评分越界或会话不存在时以 ok=false + reason 返回（业务拒绝，非通道故障）。
-func (s *SessionService) SubmitFeedback(sessionID string, rating int32, comment, tags string) (*sessionv1.SubmitFeedbackResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *SessionService) SubmitFeedback(ctx context.Context, sessionID string, rating int32, comment, tags string) (*sessionv1.SubmitFeedbackResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return s.client.SubmitFeedback(ctx, &sessionv1.SubmitFeedbackRequest{
 		SessionId: sessionID, Rating: rating, Comment: comment, Tags: tags,

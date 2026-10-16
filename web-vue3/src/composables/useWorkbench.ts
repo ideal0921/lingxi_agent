@@ -13,11 +13,10 @@ import {
   type TicketStatus,
 } from '../api/agent'
 import { WssClient, type ChatMessage, type WsStatus } from '../api/wss'
+import { useAuthStore } from '../stores/auth'
 
 /** 队列轮询间隔（ms）：兼顾实时性与服务端压力。 */
 const QUEUE_POLL_INTERVAL = 5000
-
-const AGENT_KEY = 'lingxi_agent_id'
 
 /**
  * 客服工作台状态管理：
@@ -27,9 +26,10 @@ const AGENT_KEY = 'lingxi_agent_id'
  * - 工单：一键建单 + 状态流转。
  */
 export function useWorkbench() {
-  // 坐席标识：本地持久化，联调环境固定。
-  let agentId = localStorage.getItem(AGENT_KEY) ?? 'agent-01'
-  localStorage.setItem(AGENT_KEY, agentId)
+  const auth = useAuthStore()
+  // 坐席标识与租户均取自登录态，避免写死用户/租户导致越权或跨租户
+  const agentId = auth.user?.username ?? ''
+  const tenantId = auth.tenantId
 
   const queue = ref<SessionSummary[]>([])
   const mySessions = ref<SessionSummary[]>([])
@@ -125,6 +125,8 @@ export function useWorkbench() {
         }
       },
       'agent',
+      // 观察端同样携带令牌（WebSocket 无法自定义请求头）
+      auth.token,
     )
     observer.resumeFrom(0)
     observer.connect()
@@ -192,7 +194,7 @@ export function useWorkbench() {
     if (!session || !title.trim()) return false
     try {
       await createTicket({
-        tenant_id: 'lingxi',
+        tenant_id: tenantId,
         session_id: session.session_id,
         user_id: session.user_id,
         agent_id: agentId,

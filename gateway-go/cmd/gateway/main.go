@@ -52,10 +52,14 @@ func main() {
 	router := gin.New()
 	router.Use(gin.Recovery(), middleware.AccessLog())
 
-	// 长连接：WSS 会话通道（不套限流，由心跳/缓冲控流）。
+	// 鉴权与租户上下文（M5-5.5）：可信租户身份由 JWT 解析注入，
+	// 之后所有处理器（含 WSS）一律以该身份为唯一租户来源。
+	authMiddleware := middleware.Auth(cfg.EnableAuth, cfg.JWTSecret, cfg.DefaultTenant)
+
+	// 长连接：WSS 会话通道（需租户上下文；不套限流，由心跳/缓冲控流）。
 	hub := ws.NewHub()
-	wsHandler := ws.NewHandler(hub, sessionClient, cfg.DefaultTenant)
-	router.GET("/ws", wsHandler.ServeWS)
+	wsHandler := ws.NewHandler(hub, sessionClient)
+	router.GET("/ws", authMiddleware, wsHandler.ServeWS)
 
 	// AI 流式片段消费（M3-3.8）：消费 Kafka chunk 事件并广播至会话连接。
 	// 快捷回复建议异步结果消费（M4-4.6）：过载降级后仅推送至该会话的坐席端连接。
@@ -71,46 +75,81 @@ func main() {
 		go suggestConsumer.Run(consumeCtx)
 	}
 
-	api := router.Group("/api/v1")
-	api.Use(middleware.RateLimit(100, 50)) // 默认 100 QPS/IP
-	if cfg.EnableAuth {
-		api.Use(middleware.Auth())
-	}
-	api.GET("/health", handler.Health)
-	// 用户端建会话（返回 session_id 供 WSS 连接）。
-	api.POST("/session", wsHandler.CreateSession)
-	// 坐席回复下行接口（M2-B 由客服工作台调用）。
-	api.POST("/agent/reply", wsHandler.PushAgentReply)
+	// 探活接口不鉴权（供 LB / K8s 探测）。
+	router.GET("/api/v1/health", handler.Health)
 
-	// 客服工作台接口（M2-B）：队列/接管/会话列表/工单。
+	// 管理接口 REST 透传通道（M5-5.6）：登录/用户/系统日志的权威契约在 Java REST 层，
+	// 网关仅做协议转换与角色拦截，响应状态码原样回传（业务拒绝与通道故障可区分）。
+	proxy := handler.NewProxy(client.NewRestForwarder(cfg.JavaRestAddr))
+	// 登录必须豁免鉴权，否则永远无法取得令牌
+	router.POST("/api/v1/auth/login", proxy.Forward("/api/v1/auth/login"))
+
+	api := router.Group("/api/v1")
+	api.Use(authMiddleware)
+	api.Use(middleware.RateLimit(100, 50)) // 默认 100 QPS/IP
+	// 租户级限流（M5-5.5）：大租户独立配额，避免单租户挤占全站
+	api.Use(middleware.TenantRateLimit(cfg.TenantRateRPS, cfg.TenantRateBurst, cfg.TenantQuotas))
+
+	// 角色拦截（M5-5.6）：admin 为超级角色恒放行；鉴权关闭（本地联调）时跳过
+	adminOnly := middleware.RequireRole("admin")
+	agentRole := middleware.RequireRole("agent")
+
+	// 认证与用户模块（M5-5.6）：任意已认证用户可查自身身份与登出；用户管理仅 admin
+	api.GET("/auth/me", proxy.Forward("/api/v1/auth/me"))
+	api.POST("/auth/logout", proxy.Forward("/api/v1/auth/logout"))
+	api.GET("/users", adminOnly, proxy.Forward("/api/v1/users"))
+	api.POST("/users", adminOnly, proxy.Forward("/api/v1/users"))
+	api.POST("/users/:user_id/password", adminOnly, proxy.Forward("/api/v1/users/:user_id/password"))
+	api.POST("/users/:user_id/status", adminOnly, proxy.Forward("/api/v1/users/:user_id/status"))
+	// 系统日志（M5-5.6）：仅 admin
+	api.GET("/logs", adminOnly, proxy.Forward("/api/v1/logs"))
+
+	// 知识库运营（M5-5.6 6.5）：multipart 流式反向代理（仅 admin），
+	// 覆盖 /api/v1/kb/bases 与 /api/v1/kb/documents（含分片上传）全部子路径。
+	kbProxy, kbErr := handler.NewKBProxy(cfg.JavaRestAddr)
+	if kbErr != nil {
+		log.Fatalf("知识库代理装配失败: %v", kbErr)
+	}
+	kbGroup := api.Group("/kb", adminOnly)
+	kbGroup.Any("", kbProxy)
+	kbGroup.Any("/*rest", kbProxy)
+
+	// 用户端能力：建会话 / 我的历史会话列表（任意已认证角色；身份取自令牌，不接受前端传入）
+	api.POST("/session", wsHandler.CreateSession)
+	api.GET("/sessions", wsHandler.ListSessions)
+
+	// 客服工作台接口（M2-B）：队列/接管/会话列表/工单（admin/agent）
 	agentHandler := handler.NewAgentHandler(sessionClient, ticketClient)
 	// 快捷回复建议（M4-4.6）：同步取候选草稿，过载时转异步经坐席端 WSS 推送。
-	api.POST("/agent/suggest", agentHandler.SuggestReply)
-	api.GET("/agent/queue", agentHandler.ListQueue)
-	api.POST("/agent/takeover", agentHandler.TakeOver)
-	api.GET("/agent/sessions", agentHandler.ListAgentSessions)
-	api.POST("/agent/tickets", agentHandler.CreateTicket)
-	api.GET("/agent/tickets", agentHandler.ListTickets)
-	api.POST("/agent/tickets/:ticket_id/status", agentHandler.UpdateTicketStatus)
+	api.POST("/agent/suggest", agentRole, agentHandler.SuggestReply)
+	api.GET("/agent/queue", agentRole, agentHandler.ListQueue)
+	api.POST("/agent/takeover", agentRole, agentHandler.TakeOver)
+	api.GET("/agent/sessions", agentRole, agentHandler.ListAgentSessions)
+	api.POST("/agent/tickets", agentRole, agentHandler.CreateTicket)
+	api.GET("/agent/tickets", agentRole, agentHandler.ListTickets)
+	api.POST("/agent/tickets/:ticket_id/status", agentRole, agentHandler.UpdateTicketStatus)
+	// 坐席回复下行（M2-B）
+	api.POST("/agent/reply", agentRole, wsHandler.PushAgentReply)
 
-	// 编排 Studio 接口（M4-4.7）：工作流 CRUD / 草稿 / 发布 / 版本与回滚。
+	// 编排 Studio 接口（M4-4.7）：工作流 CRUD / 草稿 / 发布 / 版本与回滚（仅 admin）
 	studioHandler := handler.NewStudioHandler(workflowClient)
-	api.GET("/studio/workflows", studioHandler.ListWorkflows)
-	api.POST("/studio/workflows", studioHandler.CreateWorkflow)
-	api.GET("/studio/workflows/:workflow_id", studioHandler.GetWorkflow)
-	api.PUT("/studio/workflows/:workflow_id/draft", studioHandler.SaveDraft)
-	api.POST("/studio/workflows/:workflow_id/publish", studioHandler.PublishWorkflow)
-	api.POST("/studio/workflows/:workflow_id/rollout", studioHandler.SetRollout)
-	api.GET("/studio/workflows/:workflow_id/versions", studioHandler.ListVersions)
-	api.GET("/studio/workflows/:workflow_id/versions/:version", studioHandler.GetVersion)
-	api.POST("/studio/workflows/:workflow_id/versions/:version/rollback", studioHandler.RollbackVersion)
-	api.DELETE("/studio/workflows/:workflow_id", studioHandler.DeleteWorkflow)
+	api.GET("/studio/workflows", adminOnly, studioHandler.ListWorkflows)
+	api.POST("/studio/workflows", adminOnly, studioHandler.CreateWorkflow)
+	api.GET("/studio/workflows/:workflow_id", adminOnly, studioHandler.GetWorkflow)
+	api.PUT("/studio/workflows/:workflow_id/draft", adminOnly, studioHandler.SaveDraft)
+	api.POST("/studio/workflows/:workflow_id/publish", adminOnly, studioHandler.PublishWorkflow)
+	api.POST("/studio/workflows/:workflow_id/rollout", adminOnly, studioHandler.SetRollout)
+	api.GET("/studio/workflows/:workflow_id/versions", adminOnly, studioHandler.ListVersions)
+	api.GET("/studio/workflows/:workflow_id/versions/:version", adminOnly, studioHandler.GetVersion)
+	api.POST("/studio/workflows/:workflow_id/versions/:version/rollback", adminOnly, studioHandler.RollbackVersion)
+	api.DELETE("/studio/workflows/:workflow_id", adminOnly, studioHandler.DeleteWorkflow)
 
-	// 运营报表与满意度接口（M5-5.1）：漏斗 / Token 消耗 / CSAT 查询 + 用户端评价提交。
+	// 运营报表（M5-5.1）：漏斗 / Token 消耗 / CSAT（admin/agent）
 	reportHandler := handler.NewReportHandler(reportClient, sessionClient)
-	api.GET("/reports/funnel", reportHandler.GetFunnel)
-	api.GET("/reports/tokens", reportHandler.GetTokens)
-	api.GET("/reports/csat", reportHandler.GetCsat)
+	api.GET("/reports/funnel", agentRole, reportHandler.GetFunnel)
+	api.GET("/reports/tokens", agentRole, reportHandler.GetTokens)
+	api.GET("/reports/csat", agentRole, reportHandler.GetCsat)
+	// 满意度评价（M5-5.1）：用户端门户提交（任意已认证角色）
 	api.POST("/session/:session_id/feedback", reportHandler.SubmitFeedback)
 
 	srv := &http.Server{

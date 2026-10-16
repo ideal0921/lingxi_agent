@@ -1,5 +1,5 @@
 -- M2-B 工单域表结构（启动时幂等建表）
--- 说明：当前仅工单域落 MySQL；会话域仍为内存实现，后续迁移时在此追加建表脚本。
+-- 说明：会话域自 M5-5.7 起亦落 MySQL（见文末 lingxi_session / lingxi_session_message），工单与会话均为持久化存储。
 
 CREATE TABLE IF NOT EXISTS lingxi_ticket (
     ticket_id   VARCHAR(64)  NOT NULL COMMENT '工单 ID（UUID）',
@@ -258,3 +258,78 @@ CREATE TABLE IF NOT EXISTS lingxi_report_feedback (
     UNIQUE KEY uk_session (session_id),
     KEY idx_tenant_time (tenant_id, created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '会话满意度表（一会话一条，后评覆盖）';
+
+-- M5-5.6 用户/权限域表结构（账号表：密码登录与 RBAC）
+-- 说明：口令以 BCrypt 哈希存储，明文永不落库；用户名租户内唯一。
+
+CREATE TABLE IF NOT EXISTS lingxi_user (
+    user_id       VARCHAR(64)  NOT NULL COMMENT '用户 ID（UUID）',
+    tenant_id     VARCHAR(64)  NOT NULL COMMENT '租户 ID',
+    username      VARCHAR(64)  NOT NULL COMMENT '登录名（租户内唯一）',
+    password_hash VARCHAR(100) NOT NULL COMMENT '口令哈希（BCrypt）',
+    display_name  VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '展示名',
+    role          VARCHAR(16)  NOT NULL COMMENT '角色：admin/agent/user',
+    status        VARCHAR(16)  NOT NULL COMMENT '状态：ENABLED/DISABLED',
+    created_at    BIGINT       NOT NULL COMMENT '创建时间（epoch ms）',
+    updated_at    BIGINT       NOT NULL COMMENT '更新时间（epoch ms）',
+    last_login_at BIGINT       NOT NULL DEFAULT 0 COMMENT '最近登录时间（epoch ms，0 表示从未登录）',
+    PRIMARY KEY (user_id),
+    UNIQUE KEY uk_tenant_username (tenant_id, username),
+    KEY idx_tenant_role (tenant_id, role)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '账号表（M5-5.6 密码登录与 RBAC）';
+
+-- M5-5.6 操作日志表（只追加，不更新）：谁在何时对哪个租户做了什么
+-- 说明：审计为旁路写入，失败不阻断主链路；detail 不得包含口令等敏感信息。
+
+CREATE TABLE IF NOT EXISTS lingxi_operation_log (
+    log_id        VARCHAR(64)   NOT NULL COMMENT '日志 ID（UUID）',
+    tenant_id     VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '租户 ID',
+    user_id       VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '操作主体用户 ID（登录失败时为空）',
+    username      VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '操作主体登录名',
+    role          VARCHAR(16)   NOT NULL DEFAULT '' COMMENT '操作主体角色',
+    module        VARCHAR(32)   NOT NULL COMMENT '模块：auth/user/security/knowledge/workflow/session/ticket/report',
+    action        VARCHAR(32)   NOT NULL COMMENT '动作：login/logout/create/update/delete/isolation_denied…',
+    resource_type VARCHAR(32)   NOT NULL DEFAULT '' COMMENT '资源类型（可空）',
+    resource_id   VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '资源标识（可空）',
+    result        VARCHAR(16)   NOT NULL COMMENT '结果：SUCCESS/FAILED/DENIED',
+    detail        VARCHAR(500)  NOT NULL DEFAULT '' COMMENT '结果说明（不含敏感信息）',
+    client_ip     VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '来源 IP',
+    user_agent    VARCHAR(255)  NOT NULL DEFAULT '' COMMENT '来源 User-Agent',
+    elapsed_ms    BIGINT        NOT NULL DEFAULT 0 COMMENT '耗时（毫秒）',
+    created_at    BIGINT        NOT NULL COMMENT '记录时间（epoch ms）',
+    PRIMARY KEY (log_id),
+    KEY idx_tenant_time (tenant_id, created_at),
+    KEY idx_module_action_time (module, action, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '操作日志表（M5-5.6 审计）';
+
+-- M5-5.7 会话域表结构（会话主表 + 消息表）：会话与消息由进程内存迁至 MySQL，服务重启不丢历史。
+-- 说明：message_count / summary 冗余在会话主表，用户侧历史列表无需回表读消息即可展示；
+-- 消息以 (session_id, seq) 为主键，保证同一会话内序号唯一且有序（断连续传游标从 1 递增）；
+-- 重复写入由仓储的 ON DUPLICATE KEY UPDATE 兜底幂等（Kafka 至少一次语义下的重投）。
+
+CREATE TABLE IF NOT EXISTS lingxi_session (
+    session_id        VARCHAR(64)   NOT NULL COMMENT '会话 ID（UUID）',
+    tenant_id         VARCHAR(64)   NOT NULL COMMENT '租户 ID（隔离条件）',
+    user_id           VARCHAR(64)   NOT NULL COMMENT '会话归属用户 ID',
+    channel           VARCHAR(32)   NOT NULL DEFAULT '' COMMENT '接入渠道：web/h5/app/wechat/feishu',
+    state             VARCHAR(16)   NOT NULL COMMENT '状态：INIT/AI_ACTIVE/WAITING_HUMAN/HUMAN_CHAT/CLOSED',
+    agent_id          VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '接管坐席 ID（未接管为空）',
+    summary           VARCHAR(2000) NOT NULL DEFAULT '' COMMENT '长程记忆摘要（AI 域压缩旧消息后回写）',
+    created_at_ms     BIGINT        NOT NULL COMMENT '建会话时间（epoch ms）',
+    last_active_at_ms BIGINT        NOT NULL COMMENT '最近活跃时间（epoch ms，列表倒序排序键）',
+    message_count     INT           NOT NULL DEFAULT 0 COMMENT '消息条数（冗余列，列表免回表）',
+    PRIMARY KEY (session_id),
+    KEY idx_tenant_user_active (tenant_id, user_id, last_active_at_ms DESC)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '会话表（M5-5.7 持久化）';
+
+CREATE TABLE IF NOT EXISTS lingxi_session_message (
+    session_id    VARCHAR(64)   NOT NULL COMMENT '会话 ID',
+    seq           BIGINT        NOT NULL COMMENT '会话内自增序号（断连续传游标，从 1 起）',
+    message_id    VARCHAR(64)   NOT NULL COMMENT '全局消息 ID（UUID / ai-<uuid>，落库幂等去重键）',
+    sender        VARCHAR(16)   NOT NULL COMMENT '发送者：user/agent/system',
+    sender_id     VARCHAR(64)   NOT NULL DEFAULT '' COMMENT '发送者身份（用户 ID / 坐席 ID / ai）',
+    content       VARCHAR(4000) NOT NULL DEFAULT '' COMMENT '消息内容',
+    created_at_ms BIGINT        NOT NULL COMMENT '消息时间（epoch ms）',
+    PRIMARY KEY (session_id, seq),
+    KEY idx_message_id (message_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '会话消息表（M5-5.7 持久化）';

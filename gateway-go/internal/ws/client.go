@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/lingxi/gateway-go/internal/tenant"
 	sessionv1 "github.com/lingxi/gateway-go/proto/sessionv1"
 )
 
@@ -29,10 +31,13 @@ const (
 )
 
 // SessionClient 会话域 gRPC 调用接口（由 handler 注入，便于单测替换）。
+// M5-5.5：方法首参为调用方上下文，承载可信租户 metadata。
 type SessionClient interface {
-	CreateSession(userID, channel, tenantID string) (sessionID string, err error)
-	SendMessage(sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error)
-	PullMessages(sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error)
+	CreateSession(ctx context.Context, userID, channel, tenantID string) (sessionID string, err error)
+	SendMessage(ctx context.Context, sessionID, sender, senderID, content string) (*sessionv1.SendMessageResponse, error)
+	PullMessages(ctx context.Context, sessionID string, lastSeq int64, limit int32) ([]*sessionv1.SessionMessage, error)
+	// ListSessionsByUser 历史会话列表：用户/租户由上下文 metadata 决定，故只需 limit。
+	ListSessionsByUser(ctx context.Context, limit int32) ([]*sessionv1.SessionListItem, error)
 }
 
 // Client 单个 WSS 连接：管理读写双 goroutine 与断连缓冲。
@@ -43,6 +48,9 @@ type Client struct {
 	session   SessionClient
 	// role 连接角色（user / agent）：用于下行差异化投递（如建议结果仅推坐席端）。
 	role string
+	// identity 建立连接时的可信租户身份（M5-5.5）：长连接存续期间恒定，
+	// 作为该连接全部出站 gRPC 调用的租户来源。
+	identity tenant.Identity
 
 	// 断连缓冲：近期消息（seq → 内容），供重连续传。
 	bufferMu sync.Mutex
@@ -53,24 +61,36 @@ type Client struct {
 	send chan *Envelope
 }
 
-// NewClient 创建连接对象并注册到 Hub（缺省角色 user，保持既有调用方兼容）。
+// NewClient 创建连接对象并注册到 Hub（缺省角色 user、无租户身份，保持既有调用方兼容）。
 func NewClient(sessionID string, conn *websocket.Conn, hub *Hub, session SessionClient) *Client {
-	return NewClientWithRole(sessionID, conn, hub, session, "user")
+	return NewClientWithIdentity(sessionID, conn, hub, session, "user", tenant.Identity{})
 }
 
-// NewClientWithRole 创建带角色的连接对象并注册到 Hub。
+// NewClientWithRole 创建带角色的连接对象并注册到 Hub（无租户身份，兼容既有调用方）。
 func NewClientWithRole(sessionID string, conn *websocket.Conn, hub *Hub, session SessionClient, role string) *Client {
+	return NewClientWithIdentity(sessionID, conn, hub, session, role, tenant.Identity{})
+}
+
+// NewClientWithIdentity 创建带角色与**可信租户身份**的连接对象并注册到 Hub。
+func NewClientWithIdentity(sessionID string, conn *websocket.Conn, hub *Hub, session SessionClient,
+	role string, identity tenant.Identity) *Client {
 	c := &Client{
 		sessionID: sessionID,
 		conn:      conn,
 		hub:       hub,
 		session:   session,
 		role:      role,
+		identity:  identity,
 		buffer:    make([]*sessionv1.SessionMessage, 0, bufferMax),
 		send:      make(chan *Envelope, writeBufferSize),
 	}
 	hub.Register(c)
 	return c
+}
+
+// callContext 构造出站调用上下文：携带本连接的可信租户身份。
+func (c *Client) callContext() context.Context {
+	return tenant.WithOutgoing(context.Background(), c.identity)
 }
 
 // Role 返回连接角色（user / agent），供角色化广播筛选。
@@ -165,7 +185,7 @@ func (c *Client) handleSend(env *Envelope) {
 		c.deliver(&Envelope{Type: MsgTypeError, Error: "消息内容不能为空"})
 		return
 	}
-	resp, err := c.session.SendMessage(c.sessionID, "user", env.Sender, env.Content)
+	resp, err := c.session.SendMessage(c.callContext(), c.sessionID, "user", env.Sender, env.Content)
 	if err != nil {
 		log.Printf("ws: 会话 %s 消息转发失败: %v", c.sessionID, err)
 		c.deliver(&Envelope{Type: MsgTypeError, Error: "消息发送失败，请重试"})
@@ -187,7 +207,7 @@ func (c *Client) handleResume(env *Envelope) {
 	// 先尝试从本地缓冲补齐，再回源 Java 域（跨网关实例场景）。
 	missed := c.bufferAfter(env.LastSeq)
 	if len(missed) == 0 {
-		if msgs, err := c.session.PullMessages(c.sessionID, env.LastSeq, 50); err == nil {
+		if msgs, err := c.session.PullMessages(c.callContext(), c.sessionID, env.LastSeq, 50); err == nil {
 			for _, m := range msgs {
 				c.bufferAppend(m)
 				c.deliver(toChatEnvelope(m))

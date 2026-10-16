@@ -533,4 +533,7 @@ async def run_session_message_consumer(
         settle=settle,
         max_poll_interval_ms=config.kafka_max_poll_interval_ms,
         restart_backoff_seconds=config.kafka_consumer_restart_backoff_seconds,
+        # 并发度优化（M5-5.2）：问答是长任务（检索 + LLM，秒级），串行消费会让并发请求排队；
+        # 启用分区级并行（分区内有序 → 会话内有序），并发上限保护下游 LLM。
+        workers=config.kafka_session_message_workers,
     )

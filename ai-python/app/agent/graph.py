@@ -39,6 +39,13 @@ from app.agent.state import AgentState, ChatMessage, StreamEvent, StreamKind
 from app.agent.tool_loop import build_tool_messages, stream_tool_answer
 from app.config import settings
 from app.privacy import PiiMasker
+from app.security.prompt_guard import (
+    SAFE_FALLBACK,
+    detect_prompt_leak,
+    harden_system_prompt,
+    scan_injection,
+    wrap_untrusted,
+)
 
 if TYPE_CHECKING:  # 仅类型标注：保持本模块可离线导入（不拉起 Milvus / LLM 具体实现）
     from app.agent.tools.executor import ToolExecutor
@@ -57,7 +64,7 @@ class LLMGenerator(Protocol):
     def stream(self, prompt: str, model: str | None = None) -> AsyncIterator[str]: ...
 
 
-_SYSTEM_PROMPT = (
+_SYSTEM_PROMPT = harden_system_prompt(
     "你是灵犀智能客服助手。请**仅依据「知识片段」**回答用户问题，"
     "若知识片段不足以回答，请如实说明并建议转人工，禁止编造。"
 )
@@ -90,27 +97,41 @@ def build_prompt(state: AgentState, *, system_prompt: str | None = None) -> str:
         system_prompt: 覆盖默认人设（M4-4.8：编排的 ``llm`` 节点可自带系统提示）。
     """
     parts: list[str] = [(system_prompt or "").strip() or _SYSTEM_PROMPT]
+    # M5-5.7 注入防护：以下四段均来自「不可信来源」（用户历史/知识库/记忆/摘要），
+    # 统一包裹为带边界标记的资料区，防止其中夹带的指令被当作系统指令执行。
     # 跨会话长期记忆（M4-4.4）：用户级画像，先于会话级摘要注入
     memory = (state.get("memory") or "").strip()
     if memory:
-        parts.append("【用户长期记忆】\n" + memory)
+        parts.append("【用户长期记忆】\n" + wrap_untrusted(memory, "用户长期记忆"))
     # 上下文窗口（M3-3.11）：超出窗口的旧对话已压缩为摘要，先于近期历史注入
     summary = (state.get("summary") or "").strip()
     if summary:
-        parts.append("【会话摘要】\n" + summary)
+        parts.append("【会话摘要】\n" + wrap_untrusted(summary, "会话摘要"))
     context_text = state.get("context_text") or ""
     parts.append(
-        "【知识片段】\n" + (context_text if context_text else "（本次未检索到相关知识）")
+        "【知识片段】\n" + (wrap_untrusted(context_text, "知识片段") if context_text else "（本次未检索到相关知识）")
     )
 
     history = state.get("history") or []
     if history:
         lines = [f"{message.role}：{message.content}" for message in history]
-        parts.append("【对话历史】\n" + "\n".join(lines))
+        parts.append("【对话历史】\n" + wrap_untrusted("\n".join(lines), "对话历史"))
 
     parts.append(f"【用户问题】\n{state.get('query', '')}")
     parts.append("请给出简洁准确的中文回答。")
     return "\n\n".join(parts)
+
+
+def system_prompt_of(prompt: str) -> str:
+    """取提示词首段（即系统提示）作为泄露比对基准。"""
+    return prompt.split("\n\n", 1)[0]
+
+
+def log_injection_audit(query: str, session_id: str) -> None:
+    """可疑注入话术审计（M5-5.7）：**仅记录规则名，不记录原文**（避免日志携带 PII），不拒绝请求。"""
+    hits = scan_injection(query)
+    if hits:
+        logger.warning("检测到疑似 Prompt 注入 session=%s 命中规则=%s", session_id, hits)
 
 
 def trim_history(history: Sequence[ChatMessage], limit: int) -> list[ChatMessage]:
@@ -191,8 +212,13 @@ def build_graph(
         return {"contexts": hits, "context_text": context_text}
 
     async def generate(state: AgentState) -> dict[str, Any]:
-        """拼装提示词并调用 LLM 网关生成；输入已脱敏，输出还原为原文。"""
+        """拼装提示词并调用 LLM 网关生成；输入已脱敏，输出还原为原文。
+
+        M5-5.7：生成前对用户问题做注入话术审计（仅告警不拒绝）；生成后做提示词泄露检测，
+        命中即替换为安全话术（不让模型复述系统提示）。
+        """
         masker = state.get("pii_masker")
+        log_injection_audit(state.get("query", ""), state.get("session_id", ""))
         memory = state.get("memory", "")
         prompt = build_prompt(
             {
@@ -207,6 +233,9 @@ def build_graph(
         answer = await gateway.generate(prompt)
         if masker is not None:
             answer = masker.restore(answer)
+        if detect_prompt_leak(answer, system_prompt_of(prompt)):
+            logger.warning("检测到系统提示泄露，回答已替换为安全话术")
+            answer = SAFE_FALLBACK
         return {"prompt": prompt, "answer": answer}
 
     builder = StateGraph(AgentState)
@@ -256,6 +285,7 @@ async def stream_answer(
     )
     masker = new_masker()
     masked_query = masker.mask(query)
+    log_injection_audit(query, "")
     trimmed = mask_history(masker, trim_history(list(history or []), limit))
     # 长期记忆进模型前脱敏（历史脏数据兜底；本轮 token_map 可正常还原）
     memory = masker.mask(memory) if memory else ""
@@ -274,7 +304,8 @@ async def stream_answer(
     if tool_executor is not None and tool_registry is not None and tool_registry.names():
         messages = build_tool_messages(
             system_prompt=_SYSTEM_PROMPT,
-            knowledge_text=context_text,
+            # M5-5.7：知识片段同样属不可信内容，进模型前包裹为资料区
+            knowledge_text=wrap_untrusted(context_text, "知识片段") if context_text else "",
             summary=summary,
             memory=memory,
             history=trimmed,
@@ -288,7 +319,7 @@ async def stream_answer(
             ctx=build_tool_context(tool_context, tenant_id=tenant_id, masker=masker),
             max_rounds=tool_max_rounds,
         )
-        async for delta in masker.restore_stream(raw_stream):
+        async for delta in guard_stream_leak(masker.restore_stream(raw_stream)):
             yield StreamEvent(kind=StreamKind.DELTA, delta=delta)
         yield StreamEvent(kind=StreamKind.DONE)
         return
@@ -302,9 +333,26 @@ async def stream_answer(
             "memory": memory,
         }
     )
-    async for delta in masker.restore_stream(gateway.stream(prompt)):
+    async for delta in guard_stream_leak(masker.restore_stream(gateway.stream(prompt)),
+                                         system_prompt_of(prompt)):
         yield StreamEvent(kind=StreamKind.DELTA, delta=delta)
     yield StreamEvent(kind=StreamKind.DONE)
+
+
+async def guard_stream_leak(deltas: AsyncIterator[str], system_prompt: str | None = None) -> AsyncIterator[str]:
+    """流式泄露守卫（M5-5.7）：累积检测系统提示泄露，命中即停止产出并补一句安全话术。
+
+    为什么「停止 + 补话术」而不是丢弃：流式片段已实时下发，无法回收；越早中断，
+    泄露内容越少（检测粒度=每个片段），随后用安全话术收尾，避免用户看到半截泄露文本。
+    """
+    accumulated = ""
+    async for delta in deltas:
+        accumulated += delta
+        if detect_prompt_leak(accumulated, system_prompt):
+            logger.warning("流式回答检测到系统提示泄露，已中断产出并补安全话术")
+            yield SAFE_FALLBACK
+            return
+        yield delta
 
 
 def build_tool_context(base: ToolContext | None, *, tenant_id: str, masker: PiiMasker) -> ToolContext:

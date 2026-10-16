@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/lingxi/gateway-go/internal/client"
+	"github.com/lingxi/gateway-go/internal/httpx"
+	"github.com/lingxi/gateway-go/internal/tenant"
 	reportv1 "github.com/lingxi/gateway-go/proto/reportv1"
 )
 
@@ -78,9 +81,9 @@ func (h *ReportHandler) GetFunnel(c *gin.Context) {
 	if !ok {
 		return
 	}
-	report, err := h.report.GetFunnelReport(query.tenantID, query.fromMs, query.toMs)
+	report, err := h.report.GetFunnelReport(tenant.ClientContext(c), query.tenantID, query.fromMs, query.toMs)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取会话漏斗失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取会话漏斗失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -96,9 +99,9 @@ func (h *ReportHandler) GetTokens(c *gin.Context) {
 	if !ok {
 		return
 	}
-	report, err := h.report.GetTokenReport(query.tenantID, query.fromMs, query.toMs)
+	report, err := h.report.GetTokenReport(tenant.ClientContext(c), query.tenantID, query.fromMs, query.toMs)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取 Token 消耗失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取 Token 消耗失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -117,9 +120,9 @@ func (h *ReportHandler) GetCsat(c *gin.Context) {
 	if !ok {
 		return
 	}
-	report, err := h.report.GetCsatReport(query.tenantID, query.fromMs, query.toMs)
+	report, err := h.report.GetCsatReport(tenant.ClientContext(c), query.tenantID, query.fromMs, query.toMs)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取满意度失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取满意度失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -154,21 +157,28 @@ func (h *ReportHandler) SubmitFeedback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "rating 必须在 1~5 之间"})
 		return
 	}
-	resp, err := h.session.SubmitFeedback(sessionID, req.Rating, req.Comment, req.Tags)
+	resp, err := h.session.SubmitFeedback(tenant.ClientContext(c), sessionID, req.Rating, req.Comment, req.Tags)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "提交评价失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "提交评价失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": resp.Ok, "reason": resp.Reason})
 }
 
 // parseReportRange 解析并校验报表公共查询参数。
-// tenant_id 必填；from/to 可选（缺省交由 Java 报表域套用最近 7 天）。
-// 校验不通过时直接写回 400 并返回 ok=false，调用方据此提前返回。
+// M5-5.5：租户一律取可信上下文，查询串 tenant_id 仅作兼容字段（不一致即 403，防跨租户窥探报表）；
+// from/to 可选（缺省交由 Java 报表域套用最近 7 天）。
+// 校验不通过时直接写回错误并返回 ok=false，调用方据此提前返回。
 func parseReportRange(c *gin.Context) (reportRange, bool) {
-	tenantID := c.Query("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id 不能为空"})
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文"})
+		return reportRange{}, false
+	}
+	if requested := c.Query("tenant_id"); requested != "" && requested != identity.TenantID {
+		log.Printf("[tenant-isolation-denied] 报表查询租户伪造已拒绝 tenant=%s requested=%s path=%s",
+			identity.TenantID, requested, c.Request.URL.Path)
+		c.JSON(http.StatusForbidden, gin.H{"error": "请求租户与身份租户不一致"})
 		return reportRange{}, false
 	}
 	fromMs, ok := parseEpochMs(c, c.Query("from"), "from")
@@ -183,7 +193,7 @@ func parseReportRange(c *gin.Context) (reportRange, bool) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "from 必须小于 to"})
 		return reportRange{}, false
 	}
-	return reportRange{tenantID: tenantID, fromMs: fromMs, toMs: toMs}, true
+	return reportRange{tenantID: identity.TenantID, fromMs: fromMs, toMs: toMs}, true
 }
 
 // parseEpochMs 解析 epoch 毫秒参数：缺省（空串）返回 0，非法或为负时写回 400 并返回 false。

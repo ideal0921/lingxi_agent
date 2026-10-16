@@ -24,6 +24,10 @@
         >
           删除
         </n-button>
+        <!-- 窄屏画布空间有限：提供节点面板显隐开关 -->
+        <n-button v-if="isNarrow" key="panels" size="small" @click="togglePanels">
+          {{ panelsOpen ? '收起面板' : '节点面板' }}
+        </n-button>
       </n-space>
 
       <n-space align="center" :size="8">
@@ -80,7 +84,7 @@
 
     <!-- 三栏：节点面板 / 画布 / 节点配置 -->
     <div class="studio-body">
-      <aside class="studio-side">
+      <aside v-show="panelsOpen" class="studio-side">
         <NodePalette />
       </aside>
 
@@ -115,7 +119,7 @@
         </VueFlow>
       </main>
 
-      <aside class="studio-side">
+      <aside v-show="panelsOpen" class="studio-side">
         <NodeConfigPanel :node="selectedNode" @change="onNodeDataChange" @remove="removeSelected" />
       </aside>
     </div>
@@ -146,7 +150,7 @@
       v-model:show="showCreate"
       preset="card"
       title="新建工作流"
-      style="width: 420px"
+      style="width: min(420px, 92vw)"
     >
       <n-form size="small" label-placement="top">
         <n-form-item label="名称（必填）">
@@ -165,7 +169,7 @@
     </n-modal>
 
     <!-- 发布 -->
-    <n-modal v-model:show="showPublish" preset="card" title="发布工作流" style="width: 440px">
+    <n-modal v-model:show="showPublish" preset="card" title="发布工作流" style="width: min(440px, 92vw)">
       <n-input v-model:value="publishNote" type="textarea" :rows="2" placeholder="发布说明（可选）" />
       <!-- 灰度发布（M4-4.8）：只推进最新版本号，生效版本不变，由灰度分流按比例放量 -->
       <n-checkbox v-model:checked="publishCanary" class="modal-checkbox">
@@ -267,6 +271,24 @@ const publishNote = ref('')
 // 灰度发布开关（M4-4.8）：勾选后 latest 前进但生效版本不变
 const publishCanary = ref(false)
 
+/** 窄屏（<1024px）标记：用于工具栏面板开关显隐。 */
+const isNarrow = ref(false)
+/** 两侧面板（节点面板 / 节点配置）显隐：窄屏默认收起，把空间让给画布。 */
+const panelsOpen = ref(true)
+
+let mqNarrow: MediaQueryList | null = null
+
+/** 同步视口断点：窄屏自动收起面板，宽屏展开。 */
+function syncViewport(): void {
+  isNarrow.value = mqNarrow?.matches ?? false
+  panelsOpen.value = !isNarrow.value
+}
+
+/** 手动切换面板显隐。 */
+function togglePanels(): void {
+  panelsOpen.value = !panelsOpen.value
+}
+
 const workflowOptions = computed(() =>
   workflows.value.map((item) => ({
     label: item.published_version > 0
@@ -280,6 +302,9 @@ const workflowOptions = computed(() =>
 const removeEnabled = computed(() => !!selectedNode.value || !!selectedEdgeId.value)
 
 onMounted(async () => {
+  mqNarrow = window.matchMedia('(max-width: 1023px)')
+  syncViewport()
+  mqNarrow.addEventListener('change', syncViewport)
   await refresh()
   // 默认打开第一条工作流：编辑器首屏不应是空画布（未选择时给出可编排的起点）
   const first = workflows.value[0]
@@ -290,6 +315,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  mqNarrow?.removeEventListener('change', syncViewport)
   window.removeEventListener('keydown', onKeydown)
 })
 
@@ -398,11 +424,11 @@ function onKeydown(event: KeyboardEvent): void {
 .studio {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* 与顶栏 56px 对齐，使画布正好占满内容区而不产生多余滚动 */
+  height: calc(100vh - 56px);
   box-sizing: border-box;
   background: #f5f6f8;
-  /* 窄视口下保持三栏最小宽度并横向滚动，避免画布被压塌 */
-  min-width: 1024px;
+  min-width: 0;
 }
 
 .studio-bar {
@@ -410,6 +436,8 @@ function onKeydown(event: KeyboardEvent): void {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* 窄屏工具栏换行，避免按钮被截断 */
+  flex-wrap: wrap;
   padding: 10px 12px;
   background: #fff;
   border-bottom: 1px solid #e8e8e8;
@@ -421,7 +449,7 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 .studio-select {
-  width: 240px;
+  width: clamp(160px, 24vw, 240px);
 }
 
 .studio-body {
@@ -430,18 +458,21 @@ function onKeydown(event: KeyboardEvent): void {
   gap: 12px;
   padding: 12px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .studio-side {
   width: 260px;
   flex: 0 0 260px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .studio-canvas {
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
+  min-width: 0;
   background: #fff;
   border: 1px solid #e8e8e8;
   border-radius: 6px;
@@ -452,7 +483,7 @@ function onKeydown(event: KeyboardEvent): void {
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 460px;
+  width: min(460px, calc(100vw - 32px));
   z-index: 10;
 }
 
@@ -465,5 +496,25 @@ function onKeydown(event: KeyboardEvent): void {
 
 .modal-checkbox {
   margin-top: 10px;
+}
+
+/* 中屏（1024~1279px）：两侧面板收窄，给画布留出可操作宽度 */
+@media (max-width: 1279px) {
+  .studio-side {
+    width: 220px;
+    flex: 0 0 220px;
+  }
+}
+
+/* 平板及以下（<1024px）：面板默认收起，画布自适应铺满；需要时可手动展开 */
+@media (max-width: 1023px) {
+  .studio-body {
+    padding: 8px;
+  }
+
+  .studio-side {
+    width: 200px;
+    flex: 0 0 200px;
+  }
 }
 </style>

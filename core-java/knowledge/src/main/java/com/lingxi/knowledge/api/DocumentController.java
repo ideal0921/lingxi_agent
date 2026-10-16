@@ -2,6 +2,9 @@ package com.lingxi.knowledge.api;
 
 import com.lingxi.common.exception.BizException;
 import com.lingxi.common.result.Result;
+import com.lingxi.common.security.JwtClaims;
+import com.lingxi.common.security.RequireRole;
+import com.lingxi.common.tenant.TenantContext;
 import com.lingxi.knowledge.api.dto.KnowledgeDtos.DocumentView;
 import com.lingxi.knowledge.api.dto.KnowledgeDtos.InitUploadRequest;
 import com.lingxi.knowledge.api.dto.KnowledgeDtos.UploadSessionView;
@@ -28,9 +31,13 @@ import java.util.List;
  *
  * <p>单请求上传适合小文件；超大文档走「初始化 → 逐片上传 → 合并」三段式，
  * 分片可乱序与重传（断点续传）。</p>
+ *
+ * <p>M5-5.6 6.5 租户收口：租户一律取可信租户上下文；按 ID / uploadId 操作一律做归属校验；
+ * 权限仅 `admin`。</p>
  */
 @RestController
 @RequestMapping("/api/v1/kb/documents")
+@RequireRole({JwtClaims.ROLE_ADMIN})
 public class DocumentController {
 
     private static final int ERR_BAD_STATUS = 40004;
@@ -45,7 +52,6 @@ public class DocumentController {
     /** 单请求上传文档（小文件）；传 docId 时作为新版本覆盖。 */
     @PostMapping
     public Result<DocumentView> upload(@RequestParam String kbId,
-                                       @RequestParam String tenantId,
                                        @RequestParam(required = false) String docId,
                                        @RequestParam(required = false) String title,
                                        @RequestParam(required = false) String categoryId,
@@ -53,8 +59,8 @@ public class DocumentController {
                                        @RequestPart("file") MultipartFile file) {
         try (InputStream content = file.getInputStream()) {
             return Result.ok(DocumentView.from(documentService.upload(
-                    kbId, tenantId, docId, title, categoryId, tags, fileNameOf(file),
-                    file.getContentType(), content, file.getSize())));
+                    kbId, TenantContext.requireTenantId(), docId, title, categoryId, tags,
+                    fileNameOf(file), file.getContentType(), content, file.getSize())));
         } catch (IOException e) {
             throw new BizException(ERR_READ_FILE, "读取上传文件失败：" + e.getMessage());
         }
@@ -63,30 +69,31 @@ public class DocumentController {
     /** 按知识库列出文档（可按切片状态过滤）。 */
     @GetMapping
     public Result<List<DocumentView>> list(@RequestParam String kbId,
-                                           @RequestParam String tenantId,
                                            @RequestParam(required = false) String status) {
         DocumentStatus documentStatus = status == null || status.isBlank() ? null : parseStatus(status);
-        return Result.ok(documentService.listDocuments(kbId, tenantId, documentStatus)
+        return Result.ok(documentService.listDocuments(kbId, TenantContext.requireTenantId(), documentStatus)
                 .stream().map(DocumentView::from).toList());
     }
 
     /** 查询文档（含切片状态、子块/父块数量）。 */
     @GetMapping("/{docId}")
-    public Result<DocumentView> get(@PathVariable String docId, @RequestParam String tenantId) {
-        return Result.ok(DocumentView.from(documentService.getDocument(docId, tenantId)));
+    public Result<DocumentView> get(@PathVariable String docId) {
+        return Result.ok(DocumentView.from(
+                documentService.getDocument(docId, TenantContext.requireTenantId())));
     }
 
     /** 下线文档（逻辑删除）。 */
     @DeleteMapping("/{docId}")
-    public Result<DocumentView> delete(@PathVariable String docId, @RequestParam String tenantId) {
-        return Result.ok(DocumentView.from(documentService.deleteDocument(docId, tenantId)));
+    public Result<DocumentView> delete(@PathVariable String docId) {
+        return Result.ok(DocumentView.from(
+                documentService.deleteDocument(docId, TenantContext.requireTenantId())));
     }
 
-    /** 初始化分片上传会话。 */
+    /** 初始化分片上传会话（租户取可信上下文）。 */
     @PostMapping("/uploads")
     public Result<UploadSessionView> initUpload(@Valid @RequestBody InitUploadRequest request) {
         return Result.ok(UploadSessionView.from(documentService.initUpload(
-                request.kbId(), request.tenantId(), request.docId(), request.title(),
+                request.kbId(), TenantContext.requireTenantId(), request.docId(), request.title(),
                 request.categoryId(), request.tags(), request.fileName(), request.totalParts())));
     }
 
@@ -96,8 +103,8 @@ public class DocumentController {
                                                 @RequestParam int partNumber,
                                                 @RequestPart("file") MultipartFile file) {
         try (InputStream content = file.getInputStream()) {
-            return Result.ok(UploadSessionView.from(
-                    documentService.uploadPart(uploadId, partNumber, content, file.getSize())));
+            return Result.ok(UploadSessionView.from(documentService.uploadPart(
+                    uploadId, TenantContext.requireTenantId(), partNumber, content, file.getSize())));
         } catch (IOException e) {
             throw new BizException(ERR_READ_FILE, "读取分片失败：" + e.getMessage());
         }
@@ -106,13 +113,14 @@ public class DocumentController {
     /** 合并分片并触发入库（分片齐全为前提）。 */
     @PostMapping("/uploads/{uploadId}/complete")
     public Result<DocumentView> completeUpload(@PathVariable String uploadId) {
-        return Result.ok(DocumentView.from(documentService.completeUpload(uploadId)));
+        return Result.ok(DocumentView.from(
+                documentService.completeUpload(uploadId, TenantContext.requireTenantId())));
     }
 
     /** 中止分片上传并清理分片。 */
     @DeleteMapping("/uploads/{uploadId}")
     public Result<Void> abortUpload(@PathVariable String uploadId) {
-        documentService.abortUpload(uploadId);
+        documentService.abortUpload(uploadId, TenantContext.requireTenantId());
         return Result.ok();
     }
 

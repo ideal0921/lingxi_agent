@@ -7,9 +7,7 @@ import {
   type FunnelReport,
   type TokenReport,
 } from '../api/report'
-
-/** 默认租户（与 Studio / 客服工作台保持一致，联调环境固定值）。 */
-const TENANT_ID = 'lingxi'
+import { useAuthStore } from '../stores/auth'
 
 /** 空数据兜底：报表未返回前渲染空态，避免模板取空对象字段报错。 */
 const EMPTY_FUNNEL: FunnelReport = { created_sessions: 0, stages: [] }
@@ -33,7 +31,8 @@ const EMPTY_CSAT: CsatReport = {
  * 三块报表相互独立，采用并行请求（allSettled）：单块失败不影响其余两块渲染。
  */
 export function useReport() {
-  const tenantId = ref(TENANT_ID)
+  // 默认租户取自登录态，避免写死导致跨租户查询
+  const tenantId = ref(useAuthStore().tenantId)
   // 日期范围（naive-ui daterange 直接给出 [起, 止] epoch 毫秒；null 表示默认最近 7 天）
   const dateRange = ref<[number, number] | null>(null)
   const loading = ref(false)

@@ -29,6 +29,7 @@ const (
 	SessionService_ListWaitingSessions_FullMethodName = "/lingxi.session.v1.SessionService/ListWaitingSessions"
 	SessionService_TakeOver_FullMethodName            = "/lingxi.session.v1.SessionService/TakeOver"
 	SessionService_ListAgentSessions_FullMethodName   = "/lingxi.session.v1.SessionService/ListAgentSessions"
+	SessionService_ListSessionsByUser_FullMethodName  = "/lingxi.session.v1.SessionService/ListSessionsByUser"
 	SessionService_SuggestReplies_FullMethodName      = "/lingxi.session.v1.SessionService/SuggestReplies"
 	SessionService_SubmitFeedback_FullMethodName      = "/lingxi.session.v1.SessionService/SubmitFeedback"
 )
@@ -46,6 +47,7 @@ type SessionServiceClient interface {
 	ListWaitingSessions(ctx context.Context, in *ListWaitingSessionsRequest, opts ...grpc.CallOption) (*ListWaitingSessionsResponse, error)
 	TakeOver(ctx context.Context, in *TakeOverRequest, opts ...grpc.CallOption) (*TakeOverResponse, error)
 	ListAgentSessions(ctx context.Context, in *ListAgentSessionsRequest, opts ...grpc.CallOption) (*ListAgentSessionsResponse, error)
+	ListSessionsByUser(ctx context.Context, in *ListSessionsByUserRequest, opts ...grpc.CallOption) (*ListSessionsByUserResponse, error)
 	SuggestReplies(ctx context.Context, in *SuggestRepliesRequest, opts ...grpc.CallOption) (*SuggestRepliesResponse, error)
 	SubmitFeedback(ctx context.Context, in *SubmitFeedbackRequest, opts ...grpc.CallOption) (*SubmitFeedbackResponse, error)
 }
@@ -128,6 +130,16 @@ func (c *sessionServiceClient) ListAgentSessions(ctx context.Context, in *ListAg
 	return out, nil
 }
 
+func (c *sessionServiceClient) ListSessionsByUser(ctx context.Context, in *ListSessionsByUserRequest, opts ...grpc.CallOption) (*ListSessionsByUserResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionsByUserResponse)
+	err := c.cc.Invoke(ctx, SessionService_ListSessionsByUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sessionServiceClient) SuggestReplies(ctx context.Context, in *SuggestRepliesRequest, opts ...grpc.CallOption) (*SuggestRepliesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SuggestRepliesResponse)
@@ -161,6 +173,7 @@ type SessionServiceServer interface {
 	ListWaitingSessions(context.Context, *ListWaitingSessionsRequest) (*ListWaitingSessionsResponse, error)
 	TakeOver(context.Context, *TakeOverRequest) (*TakeOverResponse, error)
 	ListAgentSessions(context.Context, *ListAgentSessionsRequest) (*ListAgentSessionsResponse, error)
+	ListSessionsByUser(context.Context, *ListSessionsByUserRequest) (*ListSessionsByUserResponse, error)
 	SuggestReplies(context.Context, *SuggestRepliesRequest) (*SuggestRepliesResponse, error)
 	SubmitFeedback(context.Context, *SubmitFeedbackRequest) (*SubmitFeedbackResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
@@ -193,6 +206,9 @@ func (UnimplementedSessionServiceServer) TakeOver(context.Context, *TakeOverRequ
 }
 func (UnimplementedSessionServiceServer) ListAgentSessions(context.Context, *ListAgentSessionsRequest) (*ListAgentSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAgentSessions not implemented")
+}
+func (UnimplementedSessionServiceServer) ListSessionsByUser(context.Context, *ListSessionsByUserRequest) (*ListSessionsByUserResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSessionsByUser not implemented")
 }
 func (UnimplementedSessionServiceServer) SuggestReplies(context.Context, *SuggestRepliesRequest) (*SuggestRepliesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuggestReplies not implemented")
@@ -347,6 +363,24 @@ func _SessionService_ListAgentSessions_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_ListSessionsByUser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionsByUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).ListSessionsByUser(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_ListSessionsByUser_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).ListSessionsByUser(ctx, req.(*ListSessionsByUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _SessionService_SuggestReplies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SuggestRepliesRequest)
 	if err := dec(in); err != nil {
@@ -417,6 +451,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListAgentSessions",
 			Handler:    _SessionService_ListAgentSessions_Handler,
+		},
+		{
+			MethodName: "ListSessionsByUser",
+			Handler:    _SessionService_ListSessionsByUser_Handler,
 		},
 		{
 			MethodName: "SuggestReplies",

@@ -34,6 +34,10 @@ TOPICS=("lingxi.session.message" "lingxi.ai.chunk" "lingxi.ai.reply" "lingxi.ses
         "lingxi.ai.suggest.request" "lingxi.ai.suggest.result"
         "kb.doc.ingest" "kb.doc.indexed" "kb.doc.delete"
         "lingxi.analytics.event")
+# 会话消息主题分区数（M5-5.2 消费并发优化）：AI 侧按分区并行消费，**分区数即并发上限**。
+# 消息以 session_id 为键 → 同会话必落同一分区 → 分区内有序即「会话内有序」，扩容不破坏有序性。
+SESSION_MESSAGE_TOPIC="lingxi.session.message"
+SESSION_MESSAGE_PARTITIONS="${KAFKA_SESSION_MESSAGE_PARTITIONS:-12}"
 PID_FILE="$KAFKA_DATA/kafka.pid"
 LOG_FILE="$KAFKA_DATA/kafka.log"
 
@@ -99,14 +103,32 @@ do_init_topics() {
   require_home
   nc -z 127.0.0.1 9092 2>/dev/null || die "Kafka 未运行，请先执行 start"
   for topic in "${TOPICS[@]}"; do
+    # 会话消息主题按 SESSION_MESSAGE_PARTITIONS 建（其余主题保持 3 分区）
+    local parts=3
+    if [ "$topic" = "$SESSION_MESSAGE_TOPIC" ]; then parts="$SESSION_MESSAGE_PARTITIONS"; fi
     if "$KAFKA_HOME/bin/kafka-topics.sh" --list --bootstrap-server "$BOOTSTRAP" | grep -qx "$topic"; then
       echo "主题已存在：$topic"
     else
       "$KAFKA_HOME/bin/kafka-topics.sh" --create --topic "$topic" \
-        --partitions 3 --replication-factor 1 --bootstrap-server "$BOOTSTRAP" >/dev/null
-      echo "已创建主题：$topic"
+        --partitions "$parts" --replication-factor 1 --bootstrap-server "$BOOTSTRAP" >/dev/null
+      echo "已创建主题：$topic（分区 ${parts}）"
     fi
   done
+  ensure_session_partitions
+}
+
+ensure_session_partitions() {
+  # 幂等扩容：仅当现有分区数 < 目标时增加（Kafka 只支持增加分区，不可减少）
+  local current
+  current="$("$KAFKA_HOME/bin/kafka-topics.sh" --describe --topic "$SESSION_MESSAGE_TOPIC" \
+    --bootstrap-server "$BOOTSTRAP" 2>/dev/null | grep -c 'Partition:' || true)"
+  if [ "${current:-0}" -lt "$SESSION_MESSAGE_PARTITIONS" ]; then
+    "$KAFKA_HOME/bin/kafka-topics.sh" --alter --topic "$SESSION_MESSAGE_TOPIC" \
+      --partitions "$SESSION_MESSAGE_PARTITIONS" --bootstrap-server "$BOOTSTRAP" >/dev/null
+    echo "已扩容主题分区：$SESSION_MESSAGE_TOPIC ${current} → ${SESSION_MESSAGE_PARTITIONS}"
+  else
+    echo "主题分区已满足：$SESSION_MESSAGE_TOPIC 当前 ${current}（目标 ${SESSION_MESSAGE_PARTITIONS}）"
+  fi
 }
 
 do_logs() { tail -n 50 -f "$LOG_FILE"; }

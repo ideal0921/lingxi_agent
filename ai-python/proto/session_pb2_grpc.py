@@ -70,6 +70,11 @@ class SessionServiceStub:
                 request_serializer=session__pb2.ListAgentSessionsRequest.SerializeToString,
                 response_deserializer=session__pb2.ListAgentSessionsResponse.FromString,
                 _registered_method=True)
+        self.ListSessionsByUser = channel.unary_unary(
+                '/lingxi.session.v1.SessionService/ListSessionsByUser',
+                request_serializer=session__pb2.ListSessionsByUserRequest.SerializeToString,
+                response_deserializer=session__pb2.ListSessionsByUserResponse.FromString,
+                _registered_method=True)
         self.SuggestReplies = channel.unary_unary(
                 '/lingxi.session.v1.SessionService/SuggestReplies',
                 request_serializer=session__pb2.SuggestRepliesRequest.SerializeToString,
@@ -128,6 +133,12 @@ class SessionServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListSessionsByUser(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SuggestReplies(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -177,6 +188,11 @@ def add_SessionServiceServicer_to_server(servicer, server):
                     servicer.ListAgentSessions,
                     request_deserializer=session__pb2.ListAgentSessionsRequest.FromString,
                     response_serializer=session__pb2.ListAgentSessionsResponse.SerializeToString,
+            ),
+            'ListSessionsByUser': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListSessionsByUser,
+                    request_deserializer=session__pb2.ListSessionsByUserRequest.FromString,
+                    response_serializer=session__pb2.ListSessionsByUserResponse.SerializeToString,
             ),
             'SuggestReplies': grpc.unary_unary_rpc_method_handler(
                     servicer.SuggestReplies,
@@ -379,6 +395,33 @@ class SessionService:
             '/lingxi.session.v1.SessionService/ListAgentSessions',
             session__pb2.ListAgentSessionsRequest.SerializeToString,
             session__pb2.ListAgentSessionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListSessionsByUser(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/lingxi.session.v1.SessionService/ListSessionsByUser',
+            session__pb2.ListSessionsByUserRequest.SerializeToString,
+            session__pb2.ListSessionsByUserResponse.FromString,
             options,
             channel_credentials,
             insecure,

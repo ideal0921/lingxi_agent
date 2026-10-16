@@ -1,0 +1,66 @@
+# 灵犀 Milvus 栈 —— 离线镜像编排（M5-5.4）
+#
+# 重要前提：本机 Docker Hub 不可达，**不使用 docker pull**。目标机须预先离线导入镜像：
+#     docker load -i images/milvusdb-milvus-v2.6.18.tar
+#     docker load -i images/minio-minio-RELEASE.2024-12-18.tar
+#     docker load -i images/quay-coreos-etcd-v3.5.25.tar
+# 镜像名与 tag 取自本机 `docker images` 实况，务必与下方 image 字段逐字一致：
+#     milvusdb/milvus:v2.6.18
+#     minio/minio:RELEASE.2024-12-18T13-15-44Z
+#     quay.io/coreos/etcd:v3.5.25
+#
+# 启动：docker compose -f docker-compose.offline.yml up -d   （容器名与仓库既有命名保持一致，
+# 之后 scripts/start-all.sh 可直接 `docker start milvus-etcd milvus-minio milvus-standalone` 复用）
+#
+# 未验证：本机现有 Milvus 容器是历史手工创建/运行中，本 compose 文件未在干净环境实测（见 README 对照表）。
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    container_name: milvus-etcd
+    pull_policy: never          # 离线：禁止任何镜像拉取，镜像必须已 docker load
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    volumes:
+      - etcd_data:/etcd
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: milvus-minio
+    pull_policy: never
+    environment:
+      # 生产必改：替换默认 minioadmin 凭据（同时同步 config/.env 的 LINGXI_KB_MINIO_*）
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    command: minio server /minio_data --console-address :9001
+    ports:
+      - "9000:9000"             # 知识库对象存储复用
+      - "9001:9001"             # MinIO 控制台
+    volumes:
+      - minio_data:/minio_data
+
+  milvus:
+    image: milvusdb/milvus:v2.6.18
+    container_name: milvus-standalone
+    pull_policy: never
+    command: ["milvus", "run", "standalone"]
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+      - MQ_TYPE=woodpecker       # Milvus 2.6 内置消息队列，免额外部署
+    ports:
+      - "19530:19530"           # 向量检索服务
+      - "9091:9091"             # 健康/指标
+    depends_on:
+      - etcd
+      - minio
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+volumes:
+  etcd_data:
+  minio_data:
+  milvus_data:

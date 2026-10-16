@@ -31,3 +31,9 @@ web-vue3/dist/
 
 # Helm
 deploy/offline/images/
+logs/
+
+# 本地运行产物（压测 / 安全扫描 / 安装自检报告，不入库）
+scripts/bench/reports/
+scripts/security/reports/
+deploy/offline/reports/

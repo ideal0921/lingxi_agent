@@ -1,6 +1,6 @@
 <template>
   <!-- 版本抽屉：版本快照列表 + 查看历史图定义（只读）+ 回滚到指定版本 -->
-  <n-drawer :show="show" :width="480" @update:show="emit('update:show', $event)">
+  <n-drawer :show="show" width="min(480px, 92vw)" @update:show="emit('update:show', $event)">
     <n-drawer-content closable>
       <template #header>版本快照</template>
 
@@ -70,7 +70,7 @@
     :show="!!previewDetail"
     preset="card"
     title="历史版本图定义（只读）"
-    style="width: 640px"
+    style="width: min(640px, 92vw)"
     @update:show="closePreview"
   >
     <n-alert v-if="previewError" type="warning" :show-icon="false">{{ previewError }}</n-alert>

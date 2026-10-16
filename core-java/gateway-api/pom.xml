@@ -15,8 +15,8 @@
     <description>跨语言 gRPC 契约模块：由 contracts/proto 经 Maven protobuf 插件生成</description>
 
     <properties>
-        <!-- 与 ai-python grpcio 保持同源协议版本，避免跨语言 wire 不兼容 -->
-        <grpc.version>1.71.0</grpc.version>
+        <!-- 与 ai-python grpcio 保持同源协议版本，避免跨语言 wire 不兼容；
+             grpc.version 由父 POM 统一管理（M5-5.5） -->
         <protobuf.version>3.25.6</protobuf.version>
     </properties>
 

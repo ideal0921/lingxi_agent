@@ -127,6 +127,31 @@ message ListAgentSessionsResponse {
   repeated SessionSummary sessions = 1;
 }
 
+// ---------- 用户侧历史会话列表（M5-5.7：前端「智能会话」左侧历史列表）----------
+
+// 列「我」的会话：**租户与用户一律取自可信 metadata（x-tenant-id / x-user-id）**，
+// 请求体不含 tenant_id/user_id，故无法以参数枚举他人会话（防越权）。
+message ListSessionsByUserRequest {
+  int32 limit = 1;                   // 拉取条数，默认 20，上限 50
+}
+
+// 历史会话列表项：列表只需轻量字段、不含消息体；
+// last_preview 为最后一条消息的截断预览（服务端截断，避免长消息撑爆列表 payload）。
+message SessionListItem {
+  string session_id = 1;
+  string user_id = 2;
+  string channel = 3;
+  SessionState state = 4;
+  int64 created_at_ms = 5;           // 建会话时间
+  int64 last_active_at_ms = 6;       // 最近活跃时间（排序键，倒序）
+  int32 message_count = 7;
+  string last_preview = 8;           // 最后一条消息预览（截断）
+}
+
+message ListSessionsByUserResponse {
+  repeated SessionListItem sessions = 1;
+}
+
 // ---------- 坐席快捷回复（M4-4.6：Go → Java → Python 同步通道）----------
 
 // 生成回复建议请求：上下文由 Java 侧组装，同步通道不走上文检索
@@ -175,6 +200,7 @@ service SessionService {
   rpc ListWaitingSessions(ListWaitingSessionsRequest) returns (ListWaitingSessionsResponse);
   rpc TakeOver(TakeOverRequest) returns (TakeOverResponse);
   rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse);
+  rpc ListSessionsByUser(ListSessionsByUserRequest) returns (ListSessionsByUserResponse);
   rpc SuggestReplies(SuggestRepliesRequest) returns (SuggestRepliesResponse);
   rpc SubmitFeedback(SubmitFeedbackRequest) returns (SubmitFeedbackResponse);
 }

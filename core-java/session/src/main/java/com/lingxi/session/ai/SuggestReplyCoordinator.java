@@ -7,6 +7,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.lingxi.common.tenant.TenantAccessDeniedException;
+import com.lingxi.common.tenant.TenantContext;
+import com.lingxi.common.tenant.TenantIsolationGuard;
 import com.lingxi.session.model.Session;
 import com.lingxi.session.model.SessionMessage;
 import com.lingxi.session.repo.SessionRepository;
@@ -50,13 +53,13 @@ public class SuggestReplyCoordinator {
      * @param intent         坐席意图/要点（可选）
      * @param maxSuggestions 候选条数上限（0 表示用服务端默认）
      * @return 生成结果（含降级与入队标记）
-     * @throws IllegalArgumentException 会话不存在（gRPC 层映射 {@code NOT_FOUND}）
-     * @throws IllegalStateException    会话已关闭或非人工会话（映射 {@code FAILED_PRECONDITION}）
+     * @throws IllegalArgumentException     会话不存在（gRPC 层映射 {@code NOT_FOUND}）
+     * @throws TenantAccessDeniedException  会话归属其他租户（M5-5.5，映射 NOT_FOUND + 隔离审计）
+     * @throws IllegalStateException        会话已关闭或非人工会话（映射 {@code FAILED_PRECONDITION}）
      */
     public SuggestResult suggest(String requestId, String sessionId, String agentId,
                                  String intent, int maxSuggestions) {
-        Session session = repository.findById(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + sessionId));
+        Session session = requireOwnedSession(sessionId);
         State state = session.getState();
         if (state == State.CLOSED) {
             throw new IllegalStateException("会话已关闭");
@@ -82,6 +85,22 @@ public class SuggestReplyCoordinator {
         log.warn("同步建议降级且入队失败 sessionId={} reason={} requestId={}",
                 sessionId, result.degradeReason(), requestId);
         return SuggestResult.degraded("unavailable", result.elapsedMs()).withHistoryCount(history.size());
+    }
+
+    /**
+     * 租户内取会话（M5-5.5）：快捷回复面向人工会话，同样不得跨租户。
+     * 越权抛 {@link TenantAccessDeniedException}，由 gRPC 边界统一审计并对外按「不存在」返回。
+     */
+    private Session requireOwnedSession(String sessionId) {
+        String tenantId = TenantContext.requireTenantId();
+        Session session = repository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + sessionId));
+        if (!session.getTenantId().equals(tenantId)) {
+            throw new TenantAccessDeniedException(TenantIsolationGuard.violationOf(
+                    TenantContext.current(), "session", sessionId, session.getTenantId(),
+                    "suggest_replies", "会话归属其他租户"));
+        }
+        return session;
     }
 
     /** 组装 AI 域生成请求：长程摘要 + 近 N 轮（仅 role/content）。 */

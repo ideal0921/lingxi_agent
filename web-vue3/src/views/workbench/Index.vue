@@ -105,14 +105,15 @@
               </div>
             </n-space>
           </div>
-          <n-space align="center" class="reply-bar">
+          <!-- 回复区：自定义 flex 行（n-space 包装层会使输入框无法撑满，右边缘与消息框不对齐） -->
+          <div class="reply-bar">
             <n-input
               v-model:value="draft"
               placeholder="输入回复，回车发送"
               @keydown.enter.prevent="submitReply"
             />
             <n-button type="primary" :disabled="!draft.trim()" @click="submitReply">发送</n-button>
-          </n-space>
+          </div>
         </template>
       </n-card>
     </main>
@@ -299,11 +300,11 @@ function scrollToBottom(): void {
   display: flex;
   gap: 12px;
   padding: 12px;
-  height: 100vh;
+  /* 与顶栏 56px 对齐，避免内容区多出 56px 导致滚动 */
+  height: calc(100vh - 56px);
   box-sizing: border-box;
   background: #f5f6f8;
-  /* 窄视口下保持三栏最小宽度并横向滚动，避免中栏被压塌、按钮被遮挡 */
-  min-width: 900px;
+  min-width: 0;
 }
 
 .pane {
@@ -311,6 +312,8 @@ function scrollToBottom(): void {
   flex-direction: column;
   gap: 12px;
   overflow: hidden;
+  /* flex 子项默认 min-width:auto 会被宽内容撑破，显式归零 */
+  min-width: 0;
 }
 
 .queue-pane {
@@ -415,8 +418,21 @@ function scrollToBottom(): void {
   color: #999;
 }
 
+/* 回复区与消息框左右对齐：输入框吃掉剩余宽度，发送按钮保持自身宽度贴右 */
 .reply-bar {
   margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reply-bar :deep(.n-input) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reply-bar :deep(.n-button) {
+  flex: 0 0 auto;
 }
 
 /* 快捷回复：候选卡片与降级提示（M4-4.6） */
@@ -478,6 +494,40 @@ function scrollToBottom(): void {
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  width: 420px;
+  /* 窄屏不超出视口，避免遮挡与横向溢出 */
+  width: min(420px, calc(100vw - 32px));
+}
+
+/* 中屏（1024~1279px）：三栏保留，收窄两侧栏为中栏让位 */
+@media (max-width: 1279px) {
+  .queue-pane {
+    width: 240px;
+    flex: 0 0 240px;
+  }
+
+  .ticket-pane {
+    width: 280px;
+    flex: 0 0 280px;
+  }
+}
+
+/* 平板及以下（<1024px）：三栏降级为上下堆叠，页面纵向滚动而非横向溢出 */
+@media (max-width: 1023px) {
+  .workbench {
+    flex-direction: column;
+    height: auto;
+    min-height: calc(100vh - 56px);
+  }
+
+  .queue-pane,
+  .ticket-pane,
+  .chat-pane {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .chat-list {
+    height: clamp(240px, 40vh, 380px);
+  }
 }
 </style>

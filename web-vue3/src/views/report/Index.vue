@@ -1,15 +1,18 @@
 <template>
   <!-- M5-5.1 运营报表页：会话漏斗 / Token 消耗 / 满意度（naive-ui + 内联 SVG，不引入图表库） -->
-  <n-space vertical :size="16" style="padding: 16px; max-width: 1080px; margin: 0 auto">
+  <div class="report-page">
     <!-- 顶部：租户 + 日期范围筛选 -->
     <n-card size="small" title="运营报表">
-      <template #header-extra>
-        <n-button size="small" text type="primary" @click="goPortal">返回用户端</n-button>
-      </template>
       <n-space vertical :size="10">
-        <n-space align="center" :size="12">
-          <n-input v-model:value="tenantId" placeholder="租户" style="width: 180px" />
-          <n-date-picker v-model:value="dateRange" type="daterange" clearable style="width: 320px" />
+        <!-- 筛选区允许换行，窄屏不再挤压成一条 -->
+        <n-space align="center" :size="12" :wrap="true">
+          <n-input v-model:value="tenantId" placeholder="租户" class="filter-tenant" />
+          <n-date-picker
+            v-model:value="dateRange"
+            type="daterange"
+            clearable
+            class="filter-range"
+          />
           <n-button type="primary" :loading="loading" @click="load">查询</n-button>
           <n-tag size="small" :bordered="false">未选日期时为最近 7 天</n-tag>
         </n-space>
@@ -57,29 +60,31 @@
 
     <!-- ② Token 消耗：汇总 + 日 × 提供方 × 模型 明细 -->
     <n-card size="small" title="Token 消耗">
-      <n-space :size="24" align="baseline">
-        <n-statistic label="调用次数" :value="token.total_requests" />
-        <n-statistic label="输入 token" :value="token.total_prompt_tokens" />
-        <n-statistic label="输出 token" :value="token.total_completion_tokens" />
-        <n-statistic label="估算占比" :value="estimatedRatio" suffix="%" />
-      </n-space>
+      <!-- KPI 栅格：大屏 4 列 / 中屏 2 列 / 小屏 1 列 -->
+      <n-grid cols="1 m:2 l:4" responsive="screen" :x-gap="16" :y-gap="12">
+        <n-gi><n-statistic label="调用次数" :value="token.total_requests" /></n-gi>
+        <n-gi><n-statistic label="输入 token" :value="token.total_prompt_tokens" /></n-gi>
+        <n-gi><n-statistic label="输出 token" :value="token.total_completion_tokens" /></n-gi>
+        <n-gi><n-statistic label="估算占比" :value="estimatedRatio" suffix="%" /></n-gi>
+      </n-grid>
       <n-data-table
         :columns="tokenColumns"
         :data="token.rows"
         :bordered="false"
         :single-line="false"
+        :scroll-x="1000"
         size="small"
-        style="margin-top: 12px"
+        class="data-table"
       />
     </n-card>
 
     <!-- ③ 满意度：CSAT / 平均分 / 评分分布 / 最近评价 -->
     <n-card size="small" title="满意度">
-      <n-space :size="24" align="baseline">
-        <n-statistic label="评价数" :value="csat.feedback_count" />
-        <n-statistic label="平均分" :value="csat.average_rating.toFixed(2)" />
-        <n-statistic label="CSAT（≥4 星占比）" :value="rate(csat.csat)" />
-      </n-space>
+      <n-grid cols="1 m:3" responsive="screen" :x-gap="16" :y-gap="12">
+        <n-gi><n-statistic label="评价数" :value="csat.feedback_count" /></n-gi>
+        <n-gi><n-statistic label="平均分" :value="csat.average_rating.toFixed(2)" /></n-gi>
+        <n-gi><n-statistic label="CSAT（≥4 星占比）" :value="rate(csat.csat)" /></n-gi>
+      </n-grid>
       <div v-if="csat.distribution.length" class="csat-bars">
         <div v-for="bucket in csat.distribution" :key="bucket.rating" class="csat-row">
           <span class="csat-star">{{ bucket.rating }} 星</span>
@@ -100,12 +105,11 @@
         </n-list-item>
       </n-list>
     </n-card>
-  </n-space>
+  </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
@@ -113,6 +117,8 @@ import {
   NDataTable,
   NDatePicker,
   NEmpty,
+  NGi,
+  NGrid,
   NInput,
   NList,
   NListItem,
@@ -126,7 +132,6 @@ import {
 import { useReport } from '../../composables/useReport'
 import type { TokenUsageRow } from '../../api/report'
 
-const router = useRouter()
 const { tenantId, dateRange, loading, error, funnel, token, csat, load } = useReport()
 
 // 每阶段高度（SVG 用户单位），梯形图总高随阶段数增长
@@ -174,7 +179,7 @@ const estimatedRatio = computed(() => {
 const tokenColumns: DataTableColumns<TokenUsageRow> = [
   { title: '统计日', key: 'stat_date', width: 110 },
   { title: '提供方', key: 'provider', width: 100 },
-  { title: '模型', key: 'model' },
+  { title: '模型', key: 'model', minWidth: 160 },
   { title: '调用次数', key: 'requests', width: 90 },
   { title: '输入 token', key: 'prompt_tokens', width: 110 },
   { title: '输出 token', key: 'completion_tokens', width: 110 },
@@ -203,13 +208,37 @@ function formatTime(epochMs: number): string {
   if (!epochMs) return ''
   return new Date(epochMs).toLocaleString()
 }
-
-function goPortal(): void {
-  void router.push('/')
-}
 </script>
 
 <style scoped>
+/*
+ * 页面铺满内容区剩余宽高：剩余高度由 AdminLayout 的 .content-inner.is-fill-height 提供
+ * （确定高度 = 视口 − 顶栏 56px），此处纵向 flex 列承载卡片并吃掉剩余高度；
+ * 去掉原 max-width 居中限宽，宽屏不再两侧留白；内容超出时页面内滚动。
+ */
+.report-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+/* 筛选控件宽度自适应换行：窄屏不再强制 320px 撑破布局 */
+.filter-tenant {
+  width: clamp(140px, 22vw, 180px);
+}
+
+.filter-range {
+  width: clamp(220px, 42vw, 320px);
+}
+
+.data-table {
+  margin-top: 12px;
+}
+
 /* 梯形漏斗：等宽缩放以适配不同阶段高度 */
 .funnel-svg {
   width: 100%;
@@ -291,5 +320,17 @@ function goPortal(): void {
 .feedback-time {
   font-size: 12px;
   color: #999;
+}
+
+/* 窄屏：漏斗行由四列收紧为三列，转化率文案换行到下一行，避免被挤压 */
+@media (max-width: 767px) {
+  .funnel-row {
+    grid-template-columns: 60px 1fr 48px;
+    row-gap: 2px;
+  }
+
+  .funnel-rate {
+    grid-column: 1 / -1;
+  }
 }
 </style>

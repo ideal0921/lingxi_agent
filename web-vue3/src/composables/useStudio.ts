@@ -24,11 +24,8 @@ import {
   type CanvasEdge,
   type CanvasNode,
 } from '../views/studio/types'
+import { useAuthStore } from '../stores/auth'
 
-/** Studio 归属租户（完整多租户登录态属 M5，联调环境固定）。 */
-const TENANT_ID = 'lingxi'
-/** 操作者标识：与客服工作台共用同一本地键。 */
-const OPERATOR_KEY = 'lingxi_agent_id'
 /** 撤销栈上限：超出丢弃栈底，避免长会话内存持续增长。 */
 const HISTORY_LIMIT = 50
 
@@ -40,7 +37,10 @@ const HISTORY_LIMIT = 50
  * - 草稿保存、发布、版本回滚（版本级回滚只改草稿，不新增版本）。
  */
 export function useStudio() {
-  const operator = localStorage.getItem(OPERATOR_KEY) ?? 'agent-01'
+  const auth = useAuthStore()
+  // 租户与操作者取自登录态，避免写死导致越权或跨租户
+  const tenantId = auth.tenantId
+  const operator = auth.user?.username ?? ''
 
   const workflows = ref<StudioWorkflow[]>([])
   const current = ref<StudioWorkflow | null>(null)
@@ -265,7 +265,7 @@ export function useStudio() {
   /** 刷新工作流列表。 */
   async function refresh(): Promise<void> {
     try {
-      workflows.value = await listWorkflows(TENANT_ID)
+      workflows.value = await listWorkflows(tenantId)
     } catch {
       error.value = '获取工作流列表失败'
     }
@@ -299,7 +299,7 @@ export function useStudio() {
     busy.value = true
     try {
       const created = await createWorkflow({
-        tenant_id: TENANT_ID,
+        tenant_id: tenantId,
         name: name.trim(),
         description: description.trim(),
       })

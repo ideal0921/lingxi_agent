@@ -122,11 +122,12 @@ class DocumentServiceTest {
         byte[] second = content.substring(6).getBytes(StandardCharsets.UTF_8);
         UploadSession session = service.initUpload(kbId, TENANT, null, "大文件", "c1", "", "big.txt", 2);
 
-        service.uploadPart(session.getUploadId(), 2, new ByteArrayInputStream(second), second.length);
-        UploadSession afterOne = service.uploadPart(session.getUploadId(), 1, new ByteArrayInputStream(first), first.length);
+        service.uploadPart(session.getUploadId(), TENANT, 2, new ByteArrayInputStream(second), second.length);
+        UploadSession afterOne = service.uploadPart(session.getUploadId(), TENANT, 1,
+                new ByteArrayInputStream(first), first.length);
         assertEquals(2, afterOne.getReceivedParts().size());
 
-        Document document = service.completeUpload(session.getUploadId());
+        Document document = service.completeUpload(session.getUploadId(), TENANT);
 
         assertEquals(DocumentStatus.PENDING, document.getStatus());
         assertEquals(content.getBytes(StandardCharsets.UTF_8).length, document.getSizeBytes());
@@ -140,10 +141,10 @@ class DocumentServiceTest {
     void completeRejectsIncompleteParts() {
         UploadSession session = service.initUpload(kbId, TENANT, null, "大文件", "c1", "", "big.txt", 3);
         byte[] part = "abc".getBytes(StandardCharsets.UTF_8);
-        service.uploadPart(session.getUploadId(), 1, new ByteArrayInputStream(part), part.length);
+        service.uploadPart(session.getUploadId(), TENANT, 1, new ByteArrayInputStream(part), part.length);
 
         BizException error = assertThrows(BizException.class,
-                () -> service.completeUpload(session.getUploadId()));
+                () -> service.completeUpload(session.getUploadId(), TENANT));
         assertEquals(40003, error.getCode());
     }
 

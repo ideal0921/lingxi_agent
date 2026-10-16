@@ -65,6 +65,32 @@ export async function createSession(userId: string): Promise<string> {
   return resp.session_id
 }
 
+/** 历史会话条目（服务端按会话聚合，供左侧会话列表渲染）。 */
+export interface SessionListItem {
+  session_id: string
+  user_id: string
+  channel: string
+  state: string
+  created_at_ms: number
+  last_active_at_ms: number
+  message_count: number
+  /** 最后一条消息的截断预览（列表用，避免长文全量下发） */
+  last_preview: string
+}
+
+/**
+ * 列出当前用户的历史会话。
+ *
+ * 租户与用户由服务端从令牌解析，**前端不传 tenant_id/user_id**（沿用租户隔离约定）；
+ * 服务端按 `last_active_at_ms` 倒序返回。
+ */
+export async function listSessions(limit = 20): Promise<SessionListItem[]> {
+  const resp = (await http.get('/sessions', { params: { limit } })) as {
+    sessions?: SessionListItem[]
+  }
+  return resp.sessions ?? []
+}
+
 /** 评价提交结果：ok=false 时 reason 为拒绝原因（会话不存在/评分越界等）。 */
 export interface FeedbackResult {
   ok: boolean
@@ -108,6 +134,8 @@ export class WssClient {
     private readonly onEvent: (ev: WssEvent) => void,
     /** 连接角色：坐席观察端传 'agent'（缺省 user，不追加 role 查询参数）。 */
     private readonly role: WssRole = 'user',
+    /** 访问令牌：浏览器 WebSocket 无法自定义请求头，只能经 URL 查询参数传递。 */
+    private readonly token = '',
   ) {}
 
   /** 建立连接；断连后自动重连。 */
@@ -117,7 +145,9 @@ export class WssClient {
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
     // 坐席端追加 role=agent，网关据此仅向其推送「仅推坐席」下行（如回复建议）。
     const roleQuery = this.role === 'agent' ? '&role=agent' : ''
-    const url = `${protocol}://${location.host}/ws?session_id=${this.sessionId}${roleQuery}`
+    // 令牌经查询参数传递（WebSocket 握手无法自定义 Authorization 头），空令牌时不追加。
+    const tokenQuery = this.token ? `&token=${encodeURIComponent(this.token)}` : ''
+    const url = `${protocol}://${location.host}/ws?session_id=${this.sessionId}${roleQuery}${tokenQuery}`
     const socket = new WebSocket(url)
     this.socket = socket
 

@@ -1051,6 +1051,198 @@ func (x *ListAgentSessionsResponse) GetSessions() []*SessionSummary {
 	return nil
 }
 
+// 列「我」的会话：**租户与用户一律取自可信 metadata（x-tenant-id / x-user-id）**，
+// 请求体不含 tenant_id/user_id，故无法以参数枚举他人会话（防越权）。
+type ListSessionsByUserRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Limit         int32                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"` // 拉取条数，默认 20，上限 50
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsByUserRequest) Reset() {
+	*x = ListSessionsByUserRequest{}
+	mi := &file_session_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsByUserRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsByUserRequest) ProtoMessage() {}
+
+func (x *ListSessionsByUserRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsByUserRequest.ProtoReflect.Descriptor instead.
+func (*ListSessionsByUserRequest) Descriptor() ([]byte, []int) {
+	return file_session_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListSessionsByUserRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+// 历史会话列表项：列表只需轻量字段、不含消息体；
+// last_preview 为最后一条消息的截断预览（服务端截断，避免长消息撑爆列表 payload）。
+type SessionListItem struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SessionId      string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Channel        string                 `protobuf:"bytes,3,opt,name=channel,proto3" json:"channel,omitempty"`
+	State          SessionState           `protobuf:"varint,4,opt,name=state,proto3,enum=lingxi.session.v1.SessionState" json:"state,omitempty"`
+	CreatedAtMs    int64                  `protobuf:"varint,5,opt,name=created_at_ms,json=createdAtMs,proto3" json:"created_at_ms,omitempty"`            // 建会话时间
+	LastActiveAtMs int64                  `protobuf:"varint,6,opt,name=last_active_at_ms,json=lastActiveAtMs,proto3" json:"last_active_at_ms,omitempty"` // 最近活跃时间（排序键，倒序）
+	MessageCount   int32                  `protobuf:"varint,7,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
+	LastPreview    string                 `protobuf:"bytes,8,opt,name=last_preview,json=lastPreview,proto3" json:"last_preview,omitempty"` // 最后一条消息预览（截断）
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *SessionListItem) Reset() {
+	*x = SessionListItem{}
+	mi := &file_session_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionListItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionListItem) ProtoMessage() {}
+
+func (x *SessionListItem) ProtoReflect() protoreflect.Message {
+	mi := &file_session_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionListItem.ProtoReflect.Descriptor instead.
+func (*SessionListItem) Descriptor() ([]byte, []int) {
+	return file_session_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SessionListItem) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionListItem) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *SessionListItem) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *SessionListItem) GetState() SessionState {
+	if x != nil {
+		return x.State
+	}
+	return SessionState_SESSION_STATE_UNSPECIFIED
+}
+
+func (x *SessionListItem) GetCreatedAtMs() int64 {
+	if x != nil {
+		return x.CreatedAtMs
+	}
+	return 0
+}
+
+func (x *SessionListItem) GetLastActiveAtMs() int64 {
+	if x != nil {
+		return x.LastActiveAtMs
+	}
+	return 0
+}
+
+func (x *SessionListItem) GetMessageCount() int32 {
+	if x != nil {
+		return x.MessageCount
+	}
+	return 0
+}
+
+func (x *SessionListItem) GetLastPreview() string {
+	if x != nil {
+		return x.LastPreview
+	}
+	return ""
+}
+
+type ListSessionsByUserResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sessions      []*SessionListItem     `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSessionsByUserResponse) Reset() {
+	*x = ListSessionsByUserResponse{}
+	mi := &file_session_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSessionsByUserResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSessionsByUserResponse) ProtoMessage() {}
+
+func (x *ListSessionsByUserResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSessionsByUserResponse.ProtoReflect.Descriptor instead.
+func (*ListSessionsByUserResponse) Descriptor() ([]byte, []int) {
+	return file_session_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ListSessionsByUserResponse) GetSessions() []*SessionListItem {
+	if x != nil {
+		return x.Sessions
+	}
+	return nil
+}
+
 // 生成回复建议请求：上下文由 Java 侧组装，同步通道不走上文检索
 type SuggestRepliesRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -1065,7 +1257,7 @@ type SuggestRepliesRequest struct {
 
 func (x *SuggestRepliesRequest) Reset() {
 	*x = SuggestRepliesRequest{}
-	mi := &file_session_proto_msgTypes[16]
+	mi := &file_session_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1077,7 +1269,7 @@ func (x *SuggestRepliesRequest) String() string {
 func (*SuggestRepliesRequest) ProtoMessage() {}
 
 func (x *SuggestRepliesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[16]
+	mi := &file_session_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1090,7 +1282,7 @@ func (x *SuggestRepliesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuggestRepliesRequest.ProtoReflect.Descriptor instead.
 func (*SuggestRepliesRequest) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{16}
+	return file_session_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SuggestRepliesRequest) GetRequestId() string {
@@ -1145,7 +1337,7 @@ type SuggestRepliesResponse struct {
 
 func (x *SuggestRepliesResponse) Reset() {
 	*x = SuggestRepliesResponse{}
-	mi := &file_session_proto_msgTypes[17]
+	mi := &file_session_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1157,7 +1349,7 @@ func (x *SuggestRepliesResponse) String() string {
 func (*SuggestRepliesResponse) ProtoMessage() {}
 
 func (x *SuggestRepliesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[17]
+	mi := &file_session_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1170,7 +1362,7 @@ func (x *SuggestRepliesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuggestRepliesResponse.ProtoReflect.Descriptor instead.
 func (*SuggestRepliesResponse) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{17}
+	return file_session_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SuggestRepliesResponse) GetOk() bool {
@@ -1243,7 +1435,7 @@ type SubmitFeedbackRequest struct {
 
 func (x *SubmitFeedbackRequest) Reset() {
 	*x = SubmitFeedbackRequest{}
-	mi := &file_session_proto_msgTypes[18]
+	mi := &file_session_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1255,7 +1447,7 @@ func (x *SubmitFeedbackRequest) String() string {
 func (*SubmitFeedbackRequest) ProtoMessage() {}
 
 func (x *SubmitFeedbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[18]
+	mi := &file_session_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1268,7 +1460,7 @@ func (x *SubmitFeedbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitFeedbackRequest.ProtoReflect.Descriptor instead.
 func (*SubmitFeedbackRequest) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{18}
+	return file_session_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SubmitFeedbackRequest) GetSessionId() string {
@@ -1309,7 +1501,7 @@ type SubmitFeedbackResponse struct {
 
 func (x *SubmitFeedbackResponse) Reset() {
 	*x = SubmitFeedbackResponse{}
-	mi := &file_session_proto_msgTypes[19]
+	mi := &file_session_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1321,7 +1513,7 @@ func (x *SubmitFeedbackResponse) String() string {
 func (*SubmitFeedbackResponse) ProtoMessage() {}
 
 func (x *SubmitFeedbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_session_proto_msgTypes[19]
+	mi := &file_session_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1334,7 +1526,7 @@ func (x *SubmitFeedbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitFeedbackResponse.ProtoReflect.Descriptor instead.
 func (*SubmitFeedbackResponse) Descriptor() ([]byte, []int) {
-	return file_session_proto_rawDescGZIP(), []int{19}
+	return file_session_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SubmitFeedbackResponse) GetOk() bool {
@@ -1427,7 +1619,21 @@ const file_session_proto_rawDesc = "" +
 	"\x18ListAgentSessionsRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\"Z\n" +
 	"\x19ListAgentSessionsResponse\x12=\n" +
-	"\bsessions\x18\x01 \x03(\v2!.lingxi.session.v1.SessionSummaryR\bsessions\"\xb1\x01\n" +
+	"\bsessions\x18\x01 \x03(\v2!.lingxi.session.v1.SessionSummaryR\bsessions\"1\n" +
+	"\x19ListSessionsByUserRequest\x12\x14\n" +
+	"\x05limit\x18\x01 \x01(\x05R\x05limit\"\xb1\x02\n" +
+	"\x0fSessionListItem\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x18\n" +
+	"\achannel\x18\x03 \x01(\tR\achannel\x125\n" +
+	"\x05state\x18\x04 \x01(\x0e2\x1f.lingxi.session.v1.SessionStateR\x05state\x12\"\n" +
+	"\rcreated_at_ms\x18\x05 \x01(\x03R\vcreatedAtMs\x12)\n" +
+	"\x11last_active_at_ms\x18\x06 \x01(\x03R\x0elastActiveAtMs\x12#\n" +
+	"\rmessage_count\x18\a \x01(\x05R\fmessageCount\x12!\n" +
+	"\flast_preview\x18\b \x01(\tR\vlastPreview\"\\\n" +
+	"\x1aListSessionsByUserResponse\x12>\n" +
+	"\bsessions\x18\x01 \x03(\v2\".lingxi.session.v1.SessionListItemR\bsessions\"\xb1\x01\n" +
 	"\x15SuggestRepliesRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -1464,7 +1670,7 @@ const file_session_proto_rawDesc = "" +
 	"\n" +
 	"\x06CLOSED\x10\x03\x12\r\n" +
 	"\tAI_ACTIVE\x10\x04\x12\x11\n" +
-	"\rWAITING_HUMAN\x10\x052\x9a\a\n" +
+	"\rWAITING_HUMAN\x10\x052\x8d\b\n" +
 	"\x0eSessionService\x12b\n" +
 	"\rCreateSession\x12'.lingxi.session.v1.CreateSessionRequest\x1a(.lingxi.session.v1.CreateSessionResponse\x12\\\n" +
 	"\vSendMessage\x12%.lingxi.session.v1.SendMessageRequest\x1a&.lingxi.session.v1.SendMessageResponse\x12\\\n" +
@@ -1472,7 +1678,8 @@ const file_session_proto_rawDesc = "" +
 	"\fPullMessages\x12&.lingxi.session.v1.PullMessagesRequest\x1a'.lingxi.session.v1.PullMessagesResponse\x12t\n" +
 	"\x13ListWaitingSessions\x12-.lingxi.session.v1.ListWaitingSessionsRequest\x1a..lingxi.session.v1.ListWaitingSessionsResponse\x12S\n" +
 	"\bTakeOver\x12\".lingxi.session.v1.TakeOverRequest\x1a#.lingxi.session.v1.TakeOverResponse\x12n\n" +
-	"\x11ListAgentSessions\x12+.lingxi.session.v1.ListAgentSessionsRequest\x1a,.lingxi.session.v1.ListAgentSessionsResponse\x12e\n" +
+	"\x11ListAgentSessions\x12+.lingxi.session.v1.ListAgentSessionsRequest\x1a,.lingxi.session.v1.ListAgentSessionsResponse\x12q\n" +
+	"\x12ListSessionsByUser\x12,.lingxi.session.v1.ListSessionsByUserRequest\x1a-.lingxi.session.v1.ListSessionsByUserResponse\x12e\n" +
 	"\x0eSuggestReplies\x12(.lingxi.session.v1.SuggestRepliesRequest\x1a).lingxi.session.v1.SuggestRepliesResponse\x12e\n" +
 	"\x0eSubmitFeedback\x12(.lingxi.session.v1.SubmitFeedbackRequest\x1a).lingxi.session.v1.SubmitFeedbackResponseB.Z,github.com/lingxi/gateway-go/proto/sessionv1b\x06proto3"
 
@@ -1489,7 +1696,7 @@ func file_session_proto_rawDescGZIP() []byte {
 }
 
 var file_session_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_session_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_session_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_session_proto_goTypes = []any{
 	(SessionState)(0),                   // 0: lingxi.session.v1.SessionState
 	(*CreateSessionRequest)(nil),        // 1: lingxi.session.v1.CreateSessionRequest
@@ -1508,10 +1715,13 @@ var file_session_proto_goTypes = []any{
 	(*TakeOverResponse)(nil),            // 14: lingxi.session.v1.TakeOverResponse
 	(*ListAgentSessionsRequest)(nil),    // 15: lingxi.session.v1.ListAgentSessionsRequest
 	(*ListAgentSessionsResponse)(nil),   // 16: lingxi.session.v1.ListAgentSessionsResponse
-	(*SuggestRepliesRequest)(nil),       // 17: lingxi.session.v1.SuggestRepliesRequest
-	(*SuggestRepliesResponse)(nil),      // 18: lingxi.session.v1.SuggestRepliesResponse
-	(*SubmitFeedbackRequest)(nil),       // 19: lingxi.session.v1.SubmitFeedbackRequest
-	(*SubmitFeedbackResponse)(nil),      // 20: lingxi.session.v1.SubmitFeedbackResponse
+	(*ListSessionsByUserRequest)(nil),   // 17: lingxi.session.v1.ListSessionsByUserRequest
+	(*SessionListItem)(nil),             // 18: lingxi.session.v1.SessionListItem
+	(*ListSessionsByUserResponse)(nil),  // 19: lingxi.session.v1.ListSessionsByUserResponse
+	(*SuggestRepliesRequest)(nil),       // 20: lingxi.session.v1.SuggestRepliesRequest
+	(*SuggestRepliesResponse)(nil),      // 21: lingxi.session.v1.SuggestRepliesResponse
+	(*SubmitFeedbackRequest)(nil),       // 22: lingxi.session.v1.SubmitFeedbackRequest
+	(*SubmitFeedbackResponse)(nil),      // 23: lingxi.session.v1.SubmitFeedbackResponse
 }
 var file_session_proto_depIdxs = []int32{
 	0,  // 0: lingxi.session.v1.CreateSessionResponse.state:type_name -> lingxi.session.v1.SessionState
@@ -1522,29 +1732,33 @@ var file_session_proto_depIdxs = []int32{
 	10, // 5: lingxi.session.v1.ListWaitingSessionsResponse.sessions:type_name -> lingxi.session.v1.SessionSummary
 	0,  // 6: lingxi.session.v1.TakeOverResponse.state:type_name -> lingxi.session.v1.SessionState
 	10, // 7: lingxi.session.v1.ListAgentSessionsResponse.sessions:type_name -> lingxi.session.v1.SessionSummary
-	1,  // 8: lingxi.session.v1.SessionService.CreateSession:input_type -> lingxi.session.v1.CreateSessionRequest
-	3,  // 9: lingxi.session.v1.SessionService.SendMessage:input_type -> lingxi.session.v1.SendMessageRequest
-	6,  // 10: lingxi.session.v1.SessionService.ChangeState:input_type -> lingxi.session.v1.ChangeStateRequest
-	8,  // 11: lingxi.session.v1.SessionService.PullMessages:input_type -> lingxi.session.v1.PullMessagesRequest
-	11, // 12: lingxi.session.v1.SessionService.ListWaitingSessions:input_type -> lingxi.session.v1.ListWaitingSessionsRequest
-	13, // 13: lingxi.session.v1.SessionService.TakeOver:input_type -> lingxi.session.v1.TakeOverRequest
-	15, // 14: lingxi.session.v1.SessionService.ListAgentSessions:input_type -> lingxi.session.v1.ListAgentSessionsRequest
-	17, // 15: lingxi.session.v1.SessionService.SuggestReplies:input_type -> lingxi.session.v1.SuggestRepliesRequest
-	19, // 16: lingxi.session.v1.SessionService.SubmitFeedback:input_type -> lingxi.session.v1.SubmitFeedbackRequest
-	2,  // 17: lingxi.session.v1.SessionService.CreateSession:output_type -> lingxi.session.v1.CreateSessionResponse
-	4,  // 18: lingxi.session.v1.SessionService.SendMessage:output_type -> lingxi.session.v1.SendMessageResponse
-	7,  // 19: lingxi.session.v1.SessionService.ChangeState:output_type -> lingxi.session.v1.ChangeStateResponse
-	9,  // 20: lingxi.session.v1.SessionService.PullMessages:output_type -> lingxi.session.v1.PullMessagesResponse
-	12, // 21: lingxi.session.v1.SessionService.ListWaitingSessions:output_type -> lingxi.session.v1.ListWaitingSessionsResponse
-	14, // 22: lingxi.session.v1.SessionService.TakeOver:output_type -> lingxi.session.v1.TakeOverResponse
-	16, // 23: lingxi.session.v1.SessionService.ListAgentSessions:output_type -> lingxi.session.v1.ListAgentSessionsResponse
-	18, // 24: lingxi.session.v1.SessionService.SuggestReplies:output_type -> lingxi.session.v1.SuggestRepliesResponse
-	20, // 25: lingxi.session.v1.SessionService.SubmitFeedback:output_type -> lingxi.session.v1.SubmitFeedbackResponse
-	17, // [17:26] is the sub-list for method output_type
-	8,  // [8:17] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	0,  // 8: lingxi.session.v1.SessionListItem.state:type_name -> lingxi.session.v1.SessionState
+	18, // 9: lingxi.session.v1.ListSessionsByUserResponse.sessions:type_name -> lingxi.session.v1.SessionListItem
+	1,  // 10: lingxi.session.v1.SessionService.CreateSession:input_type -> lingxi.session.v1.CreateSessionRequest
+	3,  // 11: lingxi.session.v1.SessionService.SendMessage:input_type -> lingxi.session.v1.SendMessageRequest
+	6,  // 12: lingxi.session.v1.SessionService.ChangeState:input_type -> lingxi.session.v1.ChangeStateRequest
+	8,  // 13: lingxi.session.v1.SessionService.PullMessages:input_type -> lingxi.session.v1.PullMessagesRequest
+	11, // 14: lingxi.session.v1.SessionService.ListWaitingSessions:input_type -> lingxi.session.v1.ListWaitingSessionsRequest
+	13, // 15: lingxi.session.v1.SessionService.TakeOver:input_type -> lingxi.session.v1.TakeOverRequest
+	15, // 16: lingxi.session.v1.SessionService.ListAgentSessions:input_type -> lingxi.session.v1.ListAgentSessionsRequest
+	17, // 17: lingxi.session.v1.SessionService.ListSessionsByUser:input_type -> lingxi.session.v1.ListSessionsByUserRequest
+	20, // 18: lingxi.session.v1.SessionService.SuggestReplies:input_type -> lingxi.session.v1.SuggestRepliesRequest
+	22, // 19: lingxi.session.v1.SessionService.SubmitFeedback:input_type -> lingxi.session.v1.SubmitFeedbackRequest
+	2,  // 20: lingxi.session.v1.SessionService.CreateSession:output_type -> lingxi.session.v1.CreateSessionResponse
+	4,  // 21: lingxi.session.v1.SessionService.SendMessage:output_type -> lingxi.session.v1.SendMessageResponse
+	7,  // 22: lingxi.session.v1.SessionService.ChangeState:output_type -> lingxi.session.v1.ChangeStateResponse
+	9,  // 23: lingxi.session.v1.SessionService.PullMessages:output_type -> lingxi.session.v1.PullMessagesResponse
+	12, // 24: lingxi.session.v1.SessionService.ListWaitingSessions:output_type -> lingxi.session.v1.ListWaitingSessionsResponse
+	14, // 25: lingxi.session.v1.SessionService.TakeOver:output_type -> lingxi.session.v1.TakeOverResponse
+	16, // 26: lingxi.session.v1.SessionService.ListAgentSessions:output_type -> lingxi.session.v1.ListAgentSessionsResponse
+	19, // 27: lingxi.session.v1.SessionService.ListSessionsByUser:output_type -> lingxi.session.v1.ListSessionsByUserResponse
+	21, // 28: lingxi.session.v1.SessionService.SuggestReplies:output_type -> lingxi.session.v1.SuggestRepliesResponse
+	23, // 29: lingxi.session.v1.SessionService.SubmitFeedback:output_type -> lingxi.session.v1.SubmitFeedbackResponse
+	20, // [20:30] is the sub-list for method output_type
+	10, // [10:20] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_session_proto_init() }
@@ -1558,7 +1772,7 @@ func file_session_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_proto_rawDesc), len(file_session_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   20,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

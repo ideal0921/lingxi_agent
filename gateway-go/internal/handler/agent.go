@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/lingxi/gateway-go/internal/client"
+	"github.com/lingxi/gateway-go/internal/httpx"
+	"github.com/lingxi/gateway-go/internal/tenant"
 	sessionv1 "github.com/lingxi/gateway-go/proto/sessionv1"
 	ticketv1 "github.com/lingxi/gateway-go/proto/ticketv1"
 )
@@ -70,9 +73,9 @@ func (h *AgentHandler) ListQueue(c *gin.Context) {
 			limit = int32(parsed)
 		}
 	}
-	sessions, err := h.session.ListWaitingSessions(limit)
+	sessions, err := h.session.ListWaitingSessions(tenant.ClientContext(c), limit)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取客服队列失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取客服队列失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"sessions": toSessionSummaries(sessions)})
@@ -89,9 +92,9 @@ func (h *AgentHandler) TakeOver(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id 与 agent_id 不能为空"})
 		return
 	}
-	resp, err := h.session.TakeOver(req.SessionID, req.AgentID)
+	resp, err := h.session.TakeOver(tenant.ClientContext(c), req.SessionID, req.AgentID)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "接管请求失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "接管请求失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -107,9 +110,9 @@ func (h *AgentHandler) ListAgentSessions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id 不能为空"})
 		return
 	}
-	sessions, err := h.session.ListAgentSessions(agentID)
+	sessions, err := h.session.ListAgentSessions(tenant.ClientContext(c), agentID)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取坐席会话失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取坐席会话失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"sessions": toSessionSummaries(sessions)})
@@ -130,7 +133,7 @@ func (h *AgentHandler) SuggestReply(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id 与 agent_id 不能为空"})
 		return
 	}
-	resp, err := h.session.SuggestReplies(c.Request.Context(), &sessionv1.SuggestRepliesRequest{
+	resp, err := h.session.SuggestReplies(tenant.ClientContext(c), &sessionv1.SuggestRepliesRequest{
 		RequestId:      uuid.NewString(),
 		SessionId:      req.SessionID,
 		AgentId:        req.AgentID,
@@ -138,7 +141,7 @@ func (h *AgentHandler) SuggestReply(c *gin.Context) {
 		MaxSuggestions: req.MaxSuggestions,
 	})
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取回复建议失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取回复建议失败"})
 		return
 	}
 	c.JSON(http.StatusOK, toSuggestView(resp))
@@ -146,6 +149,8 @@ func (h *AgentHandler) SuggestReply(c *gin.Context) {
 
 // CreateTicket 一键建单。
 // 路由：POST /api/v1/agent/tickets
+//
+// 租户来源（M5-5.5）：以可信上下文租户为准；请求体 tenant_id 不一致即视为伪造（403）。
 func (h *AgentHandler) CreateTicket(c *gin.Context) {
 	var req struct {
 		TenantID    string `json:"tenant_id"`
@@ -159,14 +164,25 @@ func (h *AgentHandler) CreateTicket(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "非法请求体"})
 		return
 	}
-	if req.TenantID == "" || req.SessionID == "" || req.AgentID == "" || req.Title == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id/session_id/agent_id/title 不能为空"})
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文"})
 		return
 	}
-	ticket, err := h.ticket.CreateTicket(req.TenantID, req.SessionID, req.UserID,
-		req.AgentID, req.Title, req.Description)
+	if req.TenantID != "" && req.TenantID != identity.TenantID {
+		log.Printf("[tenant-isolation-denied] 建单租户伪造已拒绝 tenant=%s requested=%s session=%s",
+			identity.TenantID, req.TenantID, req.SessionID)
+		c.JSON(http.StatusForbidden, gin.H{"error": "请求租户与身份租户不一致"})
+		return
+	}
+	if req.SessionID == "" || req.AgentID == "" || req.Title == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id/agent_id/title 不能为空"})
+		return
+	}
+	ticket, err := h.ticket.CreateTicket(tenant.ClientContext(c), identity.TenantID, req.SessionID,
+		req.UserID, req.AgentID, req.Title, req.Description)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "建单失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "建单失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ticket": toTicketView(ticket)})
@@ -186,9 +202,9 @@ func (h *AgentHandler) ListTickets(c *gin.Context) {
 		}
 		status = parsed
 	}
-	tickets, err := h.ticket.ListTickets(agentID, status)
+	tickets, err := h.ticket.ListTickets(tenant.ClientContext(c), agentID, status)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取工单失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取工单失败"})
 		return
 	}
 	views := make([]ticketView, 0, len(tickets))
@@ -215,9 +231,9 @@ func (h *AgentHandler) UpdateTicketStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "非法状态: " + req.Status})
 		return
 	}
-	resp, err := h.ticket.UpdateTicketStatus(ticketID, status, req.Operator)
+	resp, err := h.ticket.UpdateTicketStatus(tenant.ClientContext(c), ticketID, status, req.Operator)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "工单流转失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "工单流转失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": resp.Ok, "reason": resp.Reason, "ticket": toTicketView(resp.Ticket)})

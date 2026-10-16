@@ -21,6 +21,8 @@
     <modules>
         <module>common</module>
         <module>gateway-api</module>
+        <module>log</module>
+        <module>user</module>
         <module>session</module>
         <module>ticket</module>
         <module>knowledge</module>
@@ -38,5 +40,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- 对象存储客户端（知识库原始文件，M3-3.2） -->
         <minio.version>8.5.12</minio.version>
+        <!-- gRPC Java 版本（M5-5.5 起由父 POM 统一管理；与 ai-python grpcio 协议版本同源） -->
+        <grpc.version>1.71.0</grpc.version>
+        <!-- JWT（M5-5.6 认证）：与 Go 网关 golang-jwt/v5 同为 HS256，密钥经环境变量共享 -->
+        <jjwt.version>0.12.6</jjwt.version>
     </properties>
 </project>

@@ -66,6 +66,8 @@ lingxi:
       analytics-event: ${LINGXI_KAFKA_TOPIC_ANALYTICS_EVENT:lingxi.analytics.event}
     consumer-group: ${LINGXI_KAFKA_CONSUMER_GROUP_CORE:core-java}
   session:
+    # 会话存储实现（M5-5.7 持久化）：mysql（默认，本机可用）| inmemory（无 MySQL 时的本地/单测环境）
+    store: ${LINGXI_SESSION_STORE:mysql}
     # 上下文窗口（M3-3.11）：随用户消息事件带给 AI 域的「近 N 轮」消息条数上限。
     # 需大于 AI 侧的保持窗口（LINGXI_AGENT_HISTORY_MAX_MESSAGES=20），
     # 否则落在窗口外的旧消息不会出现在事件中、摘要无从产生。
@@ -73,6 +75,9 @@ lingxi:
     # 摘要移交（M4-4.5）：客服队列下发的摘要预览截断长度（字符），
     # 避免长摘要随列表 payload 膨胀；坐席接管后仍可从会话实体取完整摘要。
     summary-preview-len: ${LINGXI_SESSION_SUMMARY_PREVIEW_LEN:200}
+    # 历史会话列表（M5-5.7）：列表项 last_preview 的截断长度（字符），
+    # 只下发展示用预览，避免长消息全量回传撑爆列表 payload。
+    list-preview-len: ${LINGXI_SESSION_LIST_PREVIEW_LEN:60}
   suggest:
     # 坐席快捷回复同步通道（M4-4.6）：Go 端 5s > Java 出站 4s > Python 生成 3.5s 的超时预算。
     # 关闭时不建连、不发起同步调用，快捷回复整体降级。
@@ -87,6 +92,33 @@ lingxi:
   report:
     # 报表域（M5-5.1）：分析存储实现。mysql（默认，本机可用）| clickhouse（预留，切换只换仓储实现）
     store: ${LINGXI_REPORT_STORE:mysql}
+  # 认证与用户/权限（M5-5.6）：密钥须与 Go 网关 GATEWAY_JWT_SECRET 同值
+  auth:
+    # 是否启用 REST 认证：生产必须 true；false 仅用于本地免登录联调（开发态身份：租户默认值、角色 admin）
+    enabled: ${LINGXI_AUTH_ENABLED:true}
+    # JWT 签名密钥（HS256，至少 32 字节）；未配置时启动失败，禁止硬编码
+    secret: ${LINGXI_JWT_SECRET:lingxi-dev-secret-change-me-please-32bytes}
+    # 令牌有效期（秒），默认 8 小时
+    token-ttl-seconds: ${LINGXI_AUTH_TOKEN_TTL_SECONDS:28800}
+    # 默认租户：登录未指定租户、本地联调时的归属租户
+    default-tenant: ${LINGXI_DEFAULT_TENANT:lingxi}
+    # 预置管理员（首次启动幂等创建；生产必须覆盖初始口令）
+    admin-username: ${LINGXI_ADMIN_USERNAME:admin}
+    admin-init-password: ${LINGXI_ADMIN_INIT_PASSWORD:lingxi@2026}
+    admin-display-name: ${LINGXI_ADMIN_DISPLAY_NAME:平台管理员}
+  # 租户隔离加固（M5-5.5）：租户上下文强制校验 + 大租户独立并发资源组
+  tenant:
+    # 未单独配置的租户默认并发上限（gRPC 入口闸门，满则立即 RESOURCE_EXHAUSTED 不排队）
+    default-max-concurrent: ${LINGXI_TENANT_DEFAULT_MAX_CONCURRENT:64}
+    # 租户闸门对象上限：超出后长尾租户共用兜底闸门，防租户号滥用导致内存膨胀
+    max-gates: ${LINGXI_TENANT_MAX_GATES:5000}
+    # 大租户独立配额：租户 ID → 并发上限（大租户单独资源组）
+    quotas:
+      ${LINGXI_TENANT_QUOTA_BIG_TENANT_ID:big-tenant}: ${LINGXI_TENANT_QUOTA_BIG_TENANT:512}
+    # 租户守卫豁免服务（无租户语义的跨语言探测；业务工具由 AI 域调用，租户随请求字段传递）
+    exempt-services:
+      - lingxi.health.v1.HealthService
+      - lingxi.business.v1.BusinessToolService
   kb:
     minio:
       # 对象存储（本地复用 Milvus 的 minio 容器；生产改用 OSS 时替换端点与凭据）

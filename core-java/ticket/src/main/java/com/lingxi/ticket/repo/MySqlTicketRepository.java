@@ -1,13 +1,14 @@
 package com.lingxi.ticket.repo;
 
-import com.lingxi.ticket.model.Ticket;
-import com.lingxi.ticket.model.TicketStatus;
+import java.util.List;
+import java.util.Optional;
+
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
-import java.util.List;
-import java.util.Optional;
+import com.lingxi.ticket.model.Ticket;
+import com.lingxi.ticket.model.TicketStatus;
 
 /**
  * MySQL 工单存储：JdbcTemplate 直连本地 MySQL（lingxi 库 lingxi_ticket 表，启动时 schema.sql 建表）。
@@ -51,28 +52,39 @@ public class MySqlTicketRepository implements TicketRepository {
     }
 
     @Override
-    public Optional<Ticket> findById(String ticketId) {
+    public Optional<Ticket> findById(String ticketId, String tenantId) {
+        // M5-5.5：租户条件写入 SQL，从数据源侧强制隔离
         List<Ticket> result = jdbcTemplate.query(
-                "SELECT * FROM " + TABLE + " WHERE ticket_id = ?", ROW_MAPPER, ticketId);
+                "SELECT * FROM " + TABLE + " WHERE ticket_id = ? AND tenant_id = ?",
+                ROW_MAPPER, ticketId, tenantId);
         return result.stream().findFirst();
     }
 
     @Override
-    public List<Ticket> listByAgent(String agentId) {
-        return jdbcTemplate.query(
-                "SELECT * FROM " + TABLE + " WHERE agent_id = ? ORDER BY updated_at DESC",
-                ROW_MAPPER, agentId);
+    public boolean existsInOtherTenant(String ticketId, String tenantId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + TABLE + " WHERE ticket_id = ? AND tenant_id <> ?",
+                Integer.class, ticketId, tenantId);
+        return count != null && count > 0;
     }
 
     @Override
-    public List<Ticket> listByStatus(TicketStatus status) {
+    public List<Ticket> listByAgent(String agentId, String tenantId) {
+        return jdbcTemplate.query(
+                "SELECT * FROM " + TABLE + " WHERE agent_id = ? AND tenant_id = ? ORDER BY updated_at DESC",
+                ROW_MAPPER, agentId, tenantId);
+    }
+
+    @Override
+    public List<Ticket> listByStatus(TicketStatus status, String tenantId) {
         if (status == null) {
             return jdbcTemplate.query(
-                    "SELECT * FROM " + TABLE + " ORDER BY updated_at DESC", ROW_MAPPER);
+                    "SELECT * FROM " + TABLE + " WHERE tenant_id = ? ORDER BY updated_at DESC",
+                    ROW_MAPPER, tenantId);
         }
         return jdbcTemplate.query(
-                "SELECT * FROM " + TABLE + " WHERE status = ? ORDER BY updated_at DESC",
-                ROW_MAPPER, status.name());
+                "SELECT * FROM " + TABLE + " WHERE status = ? AND tenant_id = ? ORDER BY updated_at DESC",
+                ROW_MAPPER, status.name(), tenantId);
     }
 
     @Override

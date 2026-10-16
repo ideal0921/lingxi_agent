@@ -141,6 +141,10 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
     kafka_consumer_group: str = "lingxi-ai"
     kafka_topic_session_message: str = "lingxi.session.message"  # 消费：用户消息触发 AI
+    # 会话消息消费并发度（M5-5.2 优化）：>1 时启用「分区级并行」消费（每分区一个工作协程、
+    # 分区内严格有序），并发上限由本值封顶以保护下游 LLM；实际并发 = min(本值, 分区数)。
+    # 同一会话的消息以 session_id 为键落同一分区，故「分区内串行」即保证会话内有序。
+    kafka_session_message_workers: int = 4
     kafka_topic_ai_chunk: str = "lingxi.ai.chunk"  # 生产：流式片段（Go 消费后推 WSS）
     kafka_topic_ai_reply: str = "lingxi.ai.reply"  # 生产：最终回答（Java 持久化）
     # 上下文窗口（M3-3.11）：生产：会话摘要（Java 回写会话，随下一轮事件带回）

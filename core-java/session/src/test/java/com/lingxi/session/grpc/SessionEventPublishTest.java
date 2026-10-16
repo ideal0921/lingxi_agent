@@ -12,9 +12,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.lingxi.common.tenant.IsolationViolation;
+import com.lingxi.common.tenant.TenantContext;
+import com.lingxi.common.tenant.TenantIdentity;
+import com.lingxi.common.tenant.TenantIsolationAuditor;
 import com.lingxi.session.ai.NoOpSuggestRepliesPort;
 import com.lingxi.session.ai.NoOpSuggestRequestPublisher;
 import com.lingxi.session.ai.SuggestReplyCoordinator;
@@ -26,14 +31,21 @@ import com.lingxi.session.repo.InMemorySessionRepository;
 import com.lingxi.session.repo.SessionRepository;
 import com.lingxi.session.state.SessionStateMachine;
 
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 
 /**
  * 会话域事件发布与上下文窗口单测（M3-3.8 / M3-3.11）：
  * 验证用户消息触发事件、坐席回复不触发、AI 回答按消息 ID 幂等落库，
  * 以及 AI_ACTIVE 状态迁移、近 N 轮历史与摘要随事件透传、接管后 AI 退出。
+ *
+ * <p>M5-5.5：新增租户隔离用例——跨租户操作被拒且落隔离审计、队列按租户过滤、伪造租户被拒。</p>
  */
 class SessionEventPublishTest {
+
+    /** 会话归属租户（与测试上下文身份一致）。 */
+    private static final String TENANT = "tenant-1";
 
     /** 记录发布调用的事件发布者替身。 */
     private static final class RecordingPublisher implements SessionEventPublisher {
@@ -84,6 +96,7 @@ class SessionEventPublishTest {
 
     private RecordingPublisher publisher;
     private RecordingAnalyticsPublisher analytics;
+    private RecordingIsolationAuditor auditor;
     private SessionRepository repository;
     private SessionServiceGrpcImpl service;
     private String sessionId;
@@ -92,20 +105,29 @@ class SessionEventPublishTest {
     void setUp() {
         publisher = new RecordingPublisher();
         analytics = new RecordingAnalyticsPublisher();
+        auditor = new RecordingIsolationAuditor();
         repository = new InMemorySessionRepository();
+        // M5-5.5：会话域要求可信租户上下文（生产由 gRPC 拦截器注入）
+        TenantContext.set(new TenantIdentity(TENANT, "u1", "user"));
         // M4-4.6：快捷回复走离线空实现（本用例不校验快捷回复链路）
         // M5-5.1：分析埋点用记录型空实现（便于断言生命周期事件）
-        service = new SessionServiceGrpcImpl(repository, publisher, 20, 200,
+        // M5-5.5：隔离审计用记录型替身（便于断言越权事实）
+        service = new SessionServiceGrpcImpl(repository, publisher, 20, 200, 60,
                 new SuggestReplyCoordinator(repository, new NoOpSuggestRepliesPort(),
                         new NoOpSuggestRequestPublisher(), 20),
-                analytics);
+                analytics, auditor);
 
         CapturingObserver<lingxi.session.v1.Session.CreateSessionResponse> observer = new CapturingObserver<>();
         service.createSession(
                 lingxi.session.v1.Session.CreateSessionRequest.newBuilder()
-                        .setTenantId("tenant-1").setUserId("u1").setChannel("web").build(),
+                        .setTenantId(TENANT).setUserId("u1").setChannel("web").build(),
                 observer);
         sessionId = observer.value.getSessionId();
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     @Test
@@ -316,6 +338,125 @@ class SessionEventPublishTest {
         assertEquals("解答很清楚", analytics.feedback.get(0).comment(), "评价内容应去除首尾空白");
     }
 
+    // ---------- M5-5.5 租户隔离加固 ----------
+
+    @Test
+    void createSessionRejectsForgedTenantAndAudits() {
+        // 请求体租户与可信身份租户不一致 → 拒绝（防伪造）并落审计
+        CapturingObserver<lingxi.session.v1.Session.CreateSessionResponse> observer = new CapturingObserver<>();
+        service.createSession(lingxi.session.v1.Session.CreateSessionRequest.newBuilder()
+                .setTenantId("tenant-other").setUserId("u9").setChannel("web").build(), observer);
+
+        assertNull(observer.value, "伪造租户不得创建会话");
+        assertEquals(Status.PERMISSION_DENIED.getCode(), statusCodeOf(observer.error));
+        assertEquals(1, auditor.violations.size(), "伪造租户应落一条隔离审计");
+        IsolationViolation violation = auditor.violations.get(0);
+        assertEquals("create_session", violation.action(), "审计动作应为建会话");
+        assertEquals("tenant-other", violation.resourceTenantId(), "审计应记录被伪造的租户");
+    }
+
+    @Test
+    void createSessionAcceptsMatchingTenantField() {
+        // 请求体租户与身份一致（兼容字段）时正常创建，且归属可信租户
+        CapturingObserver<lingxi.session.v1.Session.CreateSessionResponse> observer = new CapturingObserver<>();
+        service.createSession(lingxi.session.v1.Session.CreateSessionRequest.newBuilder()
+                .setTenantId(TENANT).setUserId("u9").setChannel("web").build(), observer);
+
+        assertNotNull(observer.value, "租户一致应正常建会话");
+        assertEquals(TENANT, repository.findById(observer.value.getSessionId()).orElseThrow().getTenantId(),
+                "会话归属取可信租户");
+        assertTrue(auditor.violations.isEmpty(), "一致场景不应产生审计");
+    }
+
+    @Test
+    void crossTenantSessionOperationsAreDeniedAndAudited() {
+        // 身份切到另一租户，对 tenant-1 的会话发起各类操作
+        TenantContext.set(new TenantIdentity("tenant-2", "u2", "user"));
+
+        CapturingObserver<lingxi.session.v1.Session.SendMessageResponse> send = new CapturingObserver<>();
+        service.sendMessage(messageRequest("user", "越权提问"), send);
+        CapturingObserver<lingxi.session.v1.Session.TakeOverResponse> takeOver = new CapturingObserver<>();
+        service.takeOver(lingxi.session.v1.Session.TakeOverRequest.newBuilder()
+                .setSessionId(sessionId).setAgentId("agent-2").build(), takeOver);
+        CapturingObserver<lingxi.session.v1.Session.PullMessagesResponse> pull = new CapturingObserver<>();
+        service.pullMessages(lingxi.session.v1.Session.PullMessagesRequest.newBuilder()
+                .setSessionId(sessionId).build(), pull);
+
+        // 对外统一按「不存在」返回（不泄露存在性），避免枚举他人资源
+        assertEquals(Status.NOT_FOUND.getCode(), statusCodeOf(send.error));
+        assertEquals(Status.NOT_FOUND.getCode(), statusCodeOf(takeOver.error));
+        assertEquals(Status.NOT_FOUND.getCode(), statusCodeOf(pull.error));
+        assertNull(takeOver.value, "越权不得成功接管");
+
+        assertEquals(3, auditor.violations.size(), "三次越权各落一条审计");
+        assertEquals(List.of("send_message", "take_over", "pull_messages"),
+                auditor.violations.stream().map(IsolationViolation::action).toList(),
+                "审计动作应与实际调用对应");
+        assertTrue(publisher.events.isEmpty(), "越权不得触发 AI 应答事件");
+        assertEquals(SessionStateMachine.State.INIT,
+                repository.findById(sessionId).orElseThrow().getState(), "会话状态不得被越权修改");
+    }
+
+    @Test
+    void waitingQueueIsFilteredByCallerTenant() {
+        // 另一租户的会话进入队列
+        TenantContext.set(new TenantIdentity("tenant-2", "u2", "user"));
+        CapturingObserver<lingxi.session.v1.Session.CreateSessionResponse> created = new CapturingObserver<>();
+        service.createSession(lingxi.session.v1.Session.CreateSessionRequest.newBuilder()
+                .setUserId("u2").setChannel("web").build(), created);
+        repository.findById(created.value.getSessionId()).orElseThrow()
+                .changeState(SessionStateMachine.State.WAITING_HUMAN);
+
+        // 回到 tenant-1 视角拉队列：只应看到本租户会话
+        TenantContext.set(new TenantIdentity(TENANT, "u1", "user"));
+        CapturingObserver<lingxi.session.v1.Session.ListWaitingSessionsResponse> observer = new CapturingObserver<>();
+        service.listWaitingSessions(lingxi.session.v1.Session.ListWaitingSessionsRequest.newBuilder()
+                .setLimit(50).build(), observer);
+
+        assertEquals(1, observer.value.getSessionsCount(), "队列应只含调用方租户会话");
+        assertEquals(sessionId, observer.value.getSessions(0).getSessionId());
+
+        // 坐席会话列表同样按租户过滤
+        repository.findById(sessionId).orElseThrow().takeOver("agent-1");
+        CapturingObserver<lingxi.session.v1.Session.ListAgentSessionsResponse> agentView = new CapturingObserver<>();
+        service.listAgentSessions(lingxi.session.v1.Session.ListAgentSessionsRequest.newBuilder()
+                .setAgentId("agent-1").build(), agentView);
+        assertEquals(1, agentView.value.getSessionsCount(), "坐席会话列表应按租户过滤");
+        assertEquals(sessionId, agentView.value.getSessions(0).getSessionId());
+    }
+
+    @Test
+    void crossTenantFeedbackIsRejectedAndAudited() {
+        TenantContext.set(new TenantIdentity("tenant-2", "u2", "user"));
+
+        CapturingObserver<lingxi.session.v1.Session.SubmitFeedbackResponse> observer = new CapturingObserver<>();
+        service.submitFeedback(lingxi.session.v1.Session.SubmitFeedbackRequest.newBuilder()
+                .setSessionId(sessionId).setRating(5).build(), observer);
+
+        assertFalse(observer.value.getOk(), "跨租户评价应被拒绝");
+        assertEquals(1, auditor.violations.size(), "跨租户评价应落审计");
+        assertTrue(analytics.feedback.isEmpty(), "被拒评价不得产生埋点");
+    }
+
+    @Test
+    void missingTenantContextIsUnauthenticated() {
+        TenantContext.clear();
+
+        CapturingObserver<lingxi.session.v1.Session.SendMessageResponse> observer = new CapturingObserver<>();
+        service.sendMessage(messageRequest("user", "无租户上下文"), observer);
+
+        assertEquals(Status.UNAUTHENTICATED.getCode(), statusCodeOf(observer.error),
+                "缺少租户上下文应回未认证");
+    }
+
+    /** gRPC 错误码提取（无错误时返回 UNKNOWN，便于断言失败时给出可读结果）。 */
+    private static Status.Code statusCodeOf(Throwable error) {
+        if (error instanceof StatusRuntimeException runtimeException) {
+            return runtimeException.getStatus().getCode();
+        }
+        return Status.Code.UNKNOWN;
+    }
+
     private lingxi.session.v1.Session.SendMessageRequest messageRequest(String sender, String content) {
         return lingxi.session.v1.Session.SendMessageRequest.newBuilder()
                 .setSessionId(sessionId).setSender(sender).setSenderId("u1").setContent(content).build();
@@ -349,7 +490,18 @@ class SessionEventPublishTest {
         }
 
         private record Feedback(String sessionId, String tenantId, String userId, int rating,
-                                String comment, String tags) {
+                                 String comment, String tags) {
+        }
+    }
+
+    /** 记录型隔离审计替身（M5-5.5）：便于断言越权事实是否上报。 */
+    private static final class RecordingIsolationAuditor implements TenantIsolationAuditor {
+
+        private final List<IsolationViolation> violations = new ArrayList<>();
+
+        @Override
+        public void record(IsolationViolation violation) {
+            violations.add(violation);
         }
     }
 }

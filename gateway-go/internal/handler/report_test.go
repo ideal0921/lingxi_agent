@@ -10,10 +10,11 @@ import (
 	reportv1 "github.com/lingxi/gateway-go/proto/reportv1"
 )
 
-// newReportRouter 构造仅挂载报表与评价路由的测试路由。
+// newReportRouter 构造仅挂载报表与评价路由的测试路由（注入租户 t1）。
 func newReportRouter(handler *ReportHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	router.Use(withTestTenant("t1"))
 	router.GET("/api/v1/reports/funnel", handler.GetFunnel)
 	router.GET("/api/v1/reports/tokens", handler.GetTokens)
 	router.GET("/api/v1/reports/csat", handler.GetCsat)
@@ -90,9 +91,7 @@ func TestReportHandlerRejectsBadParams(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{"漏斗缺 tenant_id", http.MethodGet, "/api/v1/reports/funnel", ""},
-		{"Token 缺 tenant_id", http.MethodGet, "/api/v1/reports/tokens", ""},
-		{"满意度缺 tenant_id", http.MethodGet, "/api/v1/reports/csat", ""},
+		{"漏斗缺 tenant_id", http.MethodGet, "/api/v1/reports/funnel?from=abc", ""},
 		{"from 非整数", http.MethodGet, "/api/v1/reports/funnel?tenant_id=t1&from=abc", ""},
 		{"from 为负", http.MethodGet, "/api/v1/reports/funnel?tenant_id=t1&from=-1", ""},
 		{"to 非整数", http.MethodGet, "/api/v1/reports/tokens?tenant_id=t1&to=x", ""},
@@ -107,6 +106,14 @@ func TestReportHandlerRejectsBadParams(t *testing.T) {
 		if code := do(router, tc.method, tc.path, tc.body); code != http.StatusBadRequest {
 			t.Fatalf("%s：期望 400，实际 %d", tc.name, code)
 		}
+	}
+}
+
+// TestReportHandlerRejectsTenantForgery M5-5.5：查询串租户与身份租户不一致时拒绝（403，不触达后端）。
+func TestReportHandlerRejectsTenantForgery(t *testing.T) {
+	router := newReportRouter(NewReportHandler(nil, nil))
+	if code := do(router, http.MethodGet, "/api/v1/reports/funnel?tenant_id=t2", ""); code != http.StatusForbidden {
+		t.Fatalf("跨租户查询应返回 403，实际 %d", code)
 	}
 }
 

@@ -12,10 +12,11 @@ import (
 	workflowv1 "github.com/lingxi/gateway-go/proto/workflowv1"
 )
 
-// newStudioRouter 构造仅挂载编排 Studio 路由的测试路由。
+// newStudioRouter 构造仅挂载编排 Studio 路由的测试路由（注入租户 t1）。
 func newStudioRouter(handler *StudioHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	router.Use(withTestTenant("t1"))
 	router.GET("/api/v1/studio/workflows", handler.ListWorkflows)
 	router.POST("/api/v1/studio/workflows", handler.CreateWorkflow)
 	router.GET("/api/v1/studio/workflows/:workflow_id", handler.GetWorkflow)
@@ -97,9 +98,8 @@ func TestStudioHandlerRejectsMissingParams(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{"列表缺 tenant_id", http.MethodGet, "/api/v1/studio/workflows", ""},
 		{"新建缺 name", http.MethodPost, "/api/v1/studio/workflows", `{"tenant_id":"t1"}`},
-		{"新建缺 tenant_id", http.MethodPost, "/api/v1/studio/workflows", `{"name":"wf"}`},
+		{"新建缺 name（无租户字段）", http.MethodPost, "/api/v1/studio/workflows", `{}`},
 		{"保存草稿缺定义", http.MethodPut, "/api/v1/studio/workflows/wf-1/draft", `{}`},
 		{"保存草稿非法体", http.MethodPut, "/api/v1/studio/workflows/wf-1/draft", `not-json`},
 		{"查看版本号非法", http.MethodGet, "/api/v1/studio/workflows/wf-1/versions/abc", ""},
@@ -117,6 +117,18 @@ func TestStudioHandlerRejectsMissingParams(t *testing.T) {
 		if code := do(router, tc.method, tc.path, tc.body); code != http.StatusBadRequest {
 			t.Fatalf("%s：期望 400，实际 %d", tc.name, code)
 		}
+	}
+}
+
+// TestStudioHandlerRejectsTenantForgery M5-5.5：请求体/查询串租户与身份租户不一致时拒绝（403）。
+func TestStudioHandlerRejectsTenantForgery(t *testing.T) {
+	router := newStudioRouter(NewStudioHandler(nil))
+	if code := do(router, http.MethodGet, "/api/v1/studio/workflows?tenant_id=t2", ""); code != http.StatusForbidden {
+		t.Fatalf("列表跨租户应返回 403，实际 %d", code)
+	}
+	if code := do(router, http.MethodPost, "/api/v1/studio/workflows",
+		`{"tenant_id":"t2","name":"wf"}`); code != http.StatusForbidden {
+		t.Fatalf("新建跨租户应返回 403，实际 %d", code)
 	}
 }
 

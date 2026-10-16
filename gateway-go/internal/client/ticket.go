@@ -30,9 +30,9 @@ func NewTicketService(addr string) (*TicketService, error) {
 	}, nil
 }
 
-// CreateTicket 一键建单。
-func (t *TicketService) CreateTicket(tenantID, sessionID, userID, agentID, title, description string) (*ticketv1.Ticket, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// CreateTicket 一键建单：租户以 metadata 中的可信租户为准（tenantID 仅兼容字段）。
+func (t *TicketService) CreateTicket(ctx context.Context, tenantID, sessionID, userID, agentID, title, description string) (*ticketv1.Ticket, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := t.client.CreateTicket(ctx, &ticketv1.CreateTicketRequest{
 		TenantId: tenantID, SessionId: sessionID, UserId: userID,
@@ -44,18 +44,18 @@ func (t *TicketService) CreateTicket(tenantID, sessionID, userID, agentID, title
 	return resp.Ticket, nil
 }
 
-// UpdateTicketStatus 工单状态流转（status 为 proto 枚举值）。
-func (t *TicketService) UpdateTicketStatus(ticketID string, status ticketv1.TicketStatus, operator string) (*ticketv1.UpdateTicketStatusResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// UpdateTicketStatus 工单状态流转（status 为 proto 枚举值；Java 侧校验租户归属）。
+func (t *TicketService) UpdateTicketStatus(ctx context.Context, ticketID string, status ticketv1.TicketStatus, operator string) (*ticketv1.UpdateTicketStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return t.client.UpdateTicketStatus(ctx, &ticketv1.UpdateTicketStatusRequest{
 		TicketId: ticketID, TargetStatus: status, Operator: operator,
 	})
 }
 
-// ListTickets 工单列表（agentID 或 status 过滤；status 为空时传 0 值枚举）。
-func (t *TicketService) ListTickets(agentID string, status ticketv1.TicketStatus) ([]*ticketv1.Ticket, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// ListTickets 工单列表（agentID 或 status 过滤；status 为空时传 0 值枚举；Java 侧按租户过滤）。
+func (t *TicketService) ListTickets(ctx context.Context, agentID string, status ticketv1.TicketStatus) ([]*ticketv1.Ticket, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := t.client.ListTickets(ctx, &ticketv1.ListTicketsRequest{
 		AgentId: agentID, Status: status,

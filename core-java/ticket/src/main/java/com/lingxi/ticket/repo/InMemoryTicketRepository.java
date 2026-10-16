@@ -1,14 +1,15 @@
 package com.lingxi.ticket.repo;
 
-import com.lingxi.ticket.model.Ticket;
-import com.lingxi.ticket.model.TicketStatus;
-import org.springframework.context.annotation.Profile;
-import org.springframework.stereotype.Repository;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Repository;
+
+import com.lingxi.ticket.model.Ticket;
+import com.lingxi.ticket.model.TicketStatus;
 
 /**
  * 内存工单存储：仅供单元测试使用（@Profile("ticket-mem")）。
@@ -27,24 +28,34 @@ public class InMemoryTicketRepository implements TicketRepository {
     }
 
     @Override
-    public Optional<Ticket> findById(String ticketId) {
-        return Optional.ofNullable(tickets.get(ticketId));
+    public Optional<Ticket> findById(String ticketId, String tenantId) {
+        Ticket ticket = tickets.get(ticketId);
+        // 租户不匹配视为不存在，避免泄露他人资源
+        if (ticket == null || !ticket.getTenantId().equals(tenantId)) {
+            return Optional.empty();
+        }
+        return Optional.of(ticket);
     }
 
     @Override
-    public List<Ticket> listByAgent(String agentId) {
+    public boolean existsInOtherTenant(String ticketId, String tenantId) {
+        Ticket ticket = tickets.get(ticketId);
+        return ticket != null && !ticket.getTenantId().equals(tenantId);
+    }
+
+    @Override
+    public List<Ticket> listByAgent(String agentId, String tenantId) {
         return tickets.values().stream()
+                .filter(t -> tenantId.equals(t.getTenantId()))
                 .filter(t -> agentId.equals(t.getAgentId()))
                 .toList();
     }
 
     @Override
-    public List<Ticket> listByStatus(TicketStatus status) {
-        if (status == null) {
-            return List.copyOf(tickets.values());
-        }
+    public List<Ticket> listByStatus(TicketStatus status, String tenantId) {
         return tickets.values().stream()
-                .filter(t -> t.getStatus() == status)
+                .filter(t -> tenantId.equals(t.getTenantId()))
+                .filter(t -> status == null || t.getStatus() == status)
                 .toList();
     }
 

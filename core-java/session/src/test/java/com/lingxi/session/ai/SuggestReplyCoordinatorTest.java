@@ -8,9 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.lingxi.common.tenant.TenantAccessDeniedException;
+import com.lingxi.common.tenant.TenantContext;
+import com.lingxi.common.tenant.TenantIdentity;
 import com.lingxi.session.model.Session;
 import com.lingxi.session.repo.InMemorySessionRepository;
 import com.lingxi.session.state.SessionStateMachine.State;
@@ -20,10 +24,14 @@ import lingxi.agentsync.v1.AgentSync.GenerateSuggestRequest;
 /**
  * 快捷回复协调器单测（M4-4.6）：纯离线，用替身端口/发布器覆盖状态校验、
  * 上下文组装、降级与入队落点，不触网、不连消息总线。
+ *
+ * <p>M5-5.5：新增租户归属校验用例（越权抛 {@link TenantAccessDeniedException}）。</p>
  */
 class SuggestReplyCoordinatorTest {
 
     private static final int HISTORY_LIMIT = 20;
+    /** 测试租户：会话均建于该租户下。 */
+    private static final String TENANT = "tenant-1";
 
     /** 记录请求并可配置返回结果的同步端口替身。 */
     private static final class FakePort implements SuggestRepliesPort {
@@ -58,6 +66,38 @@ class SuggestReplyCoordinatorTest {
         repository = new InMemorySessionRepository();
         port = new FakePort();
         publisher = new FakePublisher();
+        // M5-5.5：协调器要求可信租户上下文（生产由 gRPC 拦截器注入）
+        TenantContext.set(new TenantIdentity(TENANT, "agent-1", "agent"));
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
+    }
+
+    // ---------- M5-5.5 租户隔离 ----------
+
+    @Test
+    void crossTenantSessionRejected() {
+        // 会话属于 tenant-1，当前身份切换为 tenant-2 → 越权
+        Session session = humanSession();
+        TenantContext.set(new TenantIdentity("tenant-2", "agent-2", "agent"));
+
+        TenantAccessDeniedException error = assertThrows(TenantAccessDeniedException.class,
+                () -> coordinator().suggest("req-x", session.getId(), "agent-2", "", 0));
+        assertEquals("session", error.violation().resourceType(), "审计事实应标明资源类型");
+        assertEquals(TENANT, error.violation().resourceTenantId(), "审计事实应记录资源实际归属租户");
+        assertTrue(port.requests.isEmpty(), "越权不得发起同步生成调用");
+    }
+
+    @Test
+    void missingTenantContextRejected() {
+        Session session = humanSession();
+        TenantContext.clear();
+
+        assertThrows(RuntimeException.class,
+                () -> coordinator().suggest("req-y", session.getId(), "agent-1", "", 0));
+        assertTrue(port.requests.isEmpty(), "缺少租户上下文不得发起同步生成调用");
     }
 
     @Test

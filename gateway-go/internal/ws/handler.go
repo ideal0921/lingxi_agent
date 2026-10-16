@@ -3,10 +3,14 @@ package ws
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+
+	"github.com/lingxi/gateway-go/internal/httpx"
+	"github.com/lingxi/gateway-go/internal/tenant"
 )
 
 // upgrader WSS 升级器：允许跨域（前端开发环境）。
@@ -20,20 +24,17 @@ var upgrader = websocket.Upgrader{
 }
 
 // Handler WSS 网关处理器：依赖注入 Hub 与会话域客户端。
+//
+// M5-5.5：租户不再由请求体/默认值决定，一律取鉴权中间件注入的可信身份，
+// 长连接建立时固化，作为该连接全部出站调用的租户来源。
 type Handler struct {
 	hub     *Hub
 	session SessionClient
-	// defaultTenant 默认租户：请求体未携带 tenant_id 时回落该值
-	// （生产由鉴权中间件按 JWT 注入真实租户，本地联调走默认租户）。
-	defaultTenant string
 }
 
 // NewHandler 创建 WSS 处理器。
-func NewHandler(hub *Hub, session SessionClient, defaultTenant string) *Handler {
-	if defaultTenant == "" {
-		defaultTenant = "lingxi"
-	}
-	return &Handler{hub: hub, session: session, defaultTenant: defaultTenant}
+func NewHandler(hub *Hub, session SessionClient) *Handler {
+	return &Handler{hub: hub, session: session}
 }
 
 // ServeWS 升级 HTTP 连接为 WSS 并接管会话长连接。
@@ -48,6 +49,11 @@ func (h *Handler) ServeWS(c *gin.Context) {
 	if role == "" {
 		role = "user"
 	}
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文，拒绝建立长连接"})
+		return
+	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -55,14 +61,16 @@ func (h *Handler) ServeWS(c *gin.Context) {
 		return
 	}
 
-	client := NewClientWithRole(sessionID, conn, h.hub, h.session, role)
-	log.Printf("ws: 会话 %s 角色 %s 已连接", sessionID, role)
+	client := NewClientWithIdentity(sessionID, conn, h.hub, h.session, role, identity)
+	log.Printf("ws: 会话 %s 租户 %s 角色 %s 已连接", sessionID, identity.TenantID, role)
 	client.Run()
 }
 
 // CreateSession 用户端建会话入口：转发 Java 会话域，返回 session_id 供 WSS 连接。
 // 路由：POST /api/v1/session {user_id, channel, tenant_id?}
-// 租户注入：请求体未带 tenant_id 时回落网关默认租户（保证会话及其后续事件均归属租户）。
+//
+// 租户来源（M5-5.5）：**一律以可信上下文租户为准**；请求体 tenant_id 仅作兼容字段，
+// 与上下文不一致即视为伪造，返回 403 并记录告警（不再静默采信请求体）。
 func (h *Handler) CreateSession(c *gin.Context) {
 	var req struct {
 		UserID   string `json:"user_id"`
@@ -80,17 +88,79 @@ func (h *Handler) CreateSession(c *gin.Context) {
 	if req.Channel == "" {
 		req.Channel = "web"
 	}
-	if req.TenantID == "" {
-		req.TenantID = h.defaultTenant
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文"})
+		return
+	}
+	if req.TenantID != "" && req.TenantID != identity.TenantID {
+		log.Printf("[tenant-isolation-denied] 建会话租户伪造已拒绝 tenant=%s requested=%s user=%s",
+			identity.TenantID, req.TenantID, req.UserID)
+		c.JSON(http.StatusForbidden, gin.H{"error": "请求租户与身份租户不一致"})
+		return
 	}
 
-	sessionID, err := h.session.CreateSession(req.UserID, req.Channel, req.TenantID)
+	sessionID, err := h.session.CreateSession(tenant.ClientContext(c), req.UserID, req.Channel, identity.TenantID)
 	if err != nil {
 		log.Printf("create-session: 创建失败 user=%s err=%v", req.UserID, err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "会话创建失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "会话创建失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"session_id": sessionID})
+}
+
+// ListSessions 用户端历史会话列表。
+// 路由：GET /api/v1/sessions?limit=20
+//
+// 租户与用户一律取鉴权中间件注入的**可信身份**（M5-5.5）：不接受前端传 user_id/tenant_id，
+// 否则可借参数枚举他人会话。limit 收敛到 [1,50]，非法值回落缺省 20。
+func (h *Handler) ListSessions(c *gin.Context) {
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文"})
+		return
+	}
+
+	items, err := h.session.ListSessionsByUser(tenant.ClientContext(c), clampSessionLimit(c.Query("limit")))
+	if err != nil {
+		log.Printf("list-sessions: 查询失败 tenant=%s user=%s err=%v",
+			identity.TenantID, identity.UserID, err)
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "会话列表查询失败"})
+		return
+	}
+
+	// 状态枚举转可读名：前端按 AI_ACTIVE / WAITING_HUMAN 等字符串渲染标签，
+	// 直接下发枚举数值会让前端无从判断（protobuf JSON 默认也是名字，这里与之一致）。
+	sessions := make([]gin.H, 0, len(items))
+	for _, item := range items {
+		sessions = append(sessions, gin.H{
+			"session_id":        item.SessionId,
+			"user_id":           item.UserId,
+			"channel":           item.Channel,
+			"state":             item.State.String(),
+			"created_at_ms":     item.CreatedAtMs,
+			"last_active_at_ms": item.LastActiveAtMs,
+			"message_count":     item.MessageCount,
+			"last_preview":      item.LastPreview,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+
+// clampSessionLimit 会话列表条数收敛：缺省 20、上限 50，非法/越界回落默认值。
+func clampSessionLimit(raw string) int32 {
+	const def, max = 20, 50
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return int32(n)
 }
 
 // PushAgentReply 坐席回复接口：经网关下行推送给用户。
@@ -110,11 +180,11 @@ func (h *Handler) PushAgentReply(c *gin.Context) {
 		return
 	}
 
-	// 落库到 Java 会话域，获得 seq。
-	resp, err := h.session.SendMessage(req.SessionID, "agent", req.AgentID, req.Content)
+	// 落库到 Java 会话域，获得 seq（Java 侧校验会话归属当前租户）。
+	resp, err := h.session.SendMessage(tenant.ClientContext(c), req.SessionID, "agent", req.AgentID, req.Content)
 	if err != nil {
 		log.Printf("agent-reply: 落库失败 session=%s err=%v", req.SessionID, err)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "消息落库失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "消息落库失败"})
 		return
 	}
 

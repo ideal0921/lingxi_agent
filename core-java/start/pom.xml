@@ -30,6 +30,18 @@
             <artifactId>lingxi-session</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- 认证与用户/权限域（M5-5.6） -->
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-user</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- 操作日志域（M5-5.6）：租户隔离审计落库实现 -->
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-log</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.lingxi</groupId>
             <artifactId>lingxi-ticket</artifactId>
@@ -93,11 +105,11 @@
             <scope>test</scope>
         </dependency>
         <!-- 进程内 gRPC 传输（M4-4.6 同步通道离线单测）：不触网，仅测试期使用。
-             版本与 gateway-api 的 grpc.version 保持一致 -->
+             版本与父 POM 的 grpc.version 保持一致 -->
         <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-inprocess</artifactId>
-            <version>1.71.0</version>
+            <version>${grpc.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

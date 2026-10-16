@@ -17,10 +17,29 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
-    /** 业务异常：按指定错误码返回。 */
+    /**
+     * 业务异常：按指定错误码返回。
+     * 错误码落在 HTTP 状态区间（400~599）时直接作为状态码（如 409 冲突 / 404 不存在），
+     * 否则统一 400，保证前端按状态语义处理而非猜测。
+     */
     @ExceptionHandler(BizException.class)
     public ResponseEntity<Result<Void>> handleBiz(BizException e) {
-        return ResponseEntity.badRequest().body(Result.fail(e.getCode(), e.getMessage()));
+        HttpStatus status = e.getCode() >= 400 && e.getCode() < 600
+                ? HttpStatus.valueOf(e.getCode())
+                : HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status).body(Result.fail(e.getCode(), e.getMessage()));
+    }
+
+    /** 未认证（M5-5.6）：401，前端据此跳登录页。 */
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<Result<Void>> handleUnauthorized(UnauthorizedException e) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Result.fail(401, e.getMessage()));
+    }
+
+    /** 无权限（M5-5.6）：403。 */
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<Result<Void>> handleForbidden(ForbiddenException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Result.fail(403, e.getMessage()));
     }
 
     /** 参数校验异常：提取首个字段错误信息。 */

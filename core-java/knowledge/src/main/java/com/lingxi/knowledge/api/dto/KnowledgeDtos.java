@@ -1,16 +1,17 @@
 package com.lingxi.knowledge.api.dto;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.lingxi.knowledge.domain.Document;
 import com.lingxi.knowledge.domain.KbCategory;
 import com.lingxi.knowledge.domain.KnowledgeBase;
 import com.lingxi.knowledge.domain.UploadSession;
+
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * 知识库域 REST 入参/出参定义（集中声明，便于契约稳定与前端对齐）。
@@ -22,8 +23,8 @@ public final class KnowledgeDtos {
     private KnowledgeDtos() {
     }
 
-    public record CreateKbRequest(@NotBlank(message = "不能为空") String tenantId,
-                                  @NotBlank(message = "不能为空") String name,
+    /** 新建知识库：租户由可信租户上下文提供，前端不再传 tenant_id（M5-5.6 6.5 收口）。 */
+    public record CreateKbRequest(@NotBlank(message = "不能为空") String name,
                                   String description) {
     }
 
@@ -36,8 +37,8 @@ public final class KnowledgeDtos {
     public record CreateCategoryRequest(@NotBlank(message = "不能为空") String name) {
     }
 
-    public record InitUploadRequest(@NotBlank(message = "不能为空") String tenantId,
-                                    @NotBlank(message = "不能为空") String kbId,
+    /** 初始化分片上传：租户由可信租户上下文提供（M5-5.6 6.5 收口）。 */
+    public record InitUploadRequest(@NotBlank(message = "不能为空") String kbId,
                                     String docId,
                                     String title,
                                     String categoryId,

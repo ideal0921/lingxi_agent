@@ -1,5 +1,21 @@
 package com.lingxi.knowledge.application;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
 import com.lingxi.common.exception.BizException;
 import com.lingxi.knowledge.domain.Document;
 import com.lingxi.knowledge.domain.DocumentStatus;
@@ -11,21 +27,6 @@ import com.lingxi.knowledge.domain.repo.DocumentRepository;
 import com.lingxi.knowledge.domain.repo.KnowledgeBaseRepository;
 import com.lingxi.knowledge.domain.repo.UploadSessionRepository;
 import com.lingxi.knowledge.domain.storage.ObjectStorage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
-import java.util.List;
-import java.util.UUID;
 
 /**
  * 文档用例编排：上传校验 → 去重 → 版本管理 → 落对象存储 → 投递入库事件。
@@ -113,8 +114,9 @@ public class DocumentService {
     }
 
     /** 上传单个分片（幂等：断点续传可重传同一片）。 */
-    public UploadSession uploadPart(String uploadId, int partNumber, InputStream content, long sizeBytes) {
-        UploadSession session = requireOpenSession(uploadId);
+    public UploadSession uploadPart(String uploadId, String tenantId, int partNumber, InputStream content,
+                                    long sizeBytes) {
+        UploadSession session = requireOpenSession(uploadId, tenantId);
         if (sizeBytes <= 0) {
             throw new BizException(ERR_FILE_EMPTY, "分片内容为空");
         }
@@ -128,8 +130,8 @@ public class DocumentService {
     }
 
     /** 合并分片并落库（分片齐全为前提），随后投递入库事件。 */
-    public Document completeUpload(String uploadId) {
-        UploadSession session = requireOpenSession(uploadId);
+    public Document completeUpload(String uploadId, String tenantId) {
+        UploadSession session = requireOpenSession(uploadId, tenantId);
         if (!session.allPartsReceived()) {
             throw new BizException(ERR_PARTS_INCOMPLETE,
                     "分片不完整，已收 " + session.getReceivedParts().size() + "/" + session.getTotalParts());
@@ -149,8 +151,8 @@ public class DocumentService {
     }
 
     /** 中止上传会话并清理已上传分片。 */
-    public void abortUpload(String uploadId) {
-        UploadSession session = requireOpenSession(uploadId);
+    public void abortUpload(String uploadId, String tenantId) {
+        UploadSession session = requireOpenSession(uploadId, tenantId);
         session.abort();
         uploadSessionRepository.save(session);
         removeParts(uploadId, session.getTotalParts());
@@ -285,9 +287,13 @@ public class DocumentService {
         return document;
     }
 
-    private UploadSession requireOpenSession(String uploadId) {
+    private UploadSession requireOpenSession(String uploadId, String tenantId) {
         UploadSession session = uploadSessionRepository.findById(uploadId)
                 .orElseThrow(() -> new BizException(ERR_UPLOAD_NOT_FOUND, "上传会话不存在"));
+        if (!session.getTenantId().equals(tenantId)) {
+            // 越权与不存在统一表现为「上传会话不存在」（M5-5.6 6.5 租户收口）
+            throw new BizException(ERR_UPLOAD_NOT_FOUND, "上传会话不存在");
+        }
         if (!session.isOpen()) {
             throw new BizException(ERR_UPLOAD_NOT_FOUND, "上传会话已结束，状态=" + session.getStatus());
         }

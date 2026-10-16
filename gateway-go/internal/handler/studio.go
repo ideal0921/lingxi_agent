@@ -2,12 +2,15 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/lingxi/gateway-go/internal/client"
+	"github.com/lingxi/gateway-go/internal/httpx"
+	"github.com/lingxi/gateway-go/internal/tenant"
 	workflowv1 "github.com/lingxi/gateway-go/proto/workflowv1"
 )
 
@@ -48,17 +51,23 @@ type workflowVersionView struct {
 	CreatedAtMs   int64  `json:"created_at_ms"`
 }
 
-// ListWorkflows 按租户列出工作流。
-// 路由：GET /api/v1/studio/workflows?tenant_id=xxx
+// ListWorkflows 列出当前租户的工作流。
+// 路由：GET /api/v1/studio/workflows（租户取可信上下文；查询串 tenant_id 不一致即 403）
 func (h *StudioHandler) ListWorkflows(c *gin.Context) {
-	tenantID := c.Query("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id 不能为空"})
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文"})
 		return
 	}
-	workflows, err := h.workflow.ListWorkflows(tenantID)
+	if requested := c.Query("tenant_id"); requested != "" && requested != identity.TenantID {
+		log.Printf("[tenant-isolation-denied] 工作流列表租户伪造已拒绝 tenant=%s requested=%s",
+			identity.TenantID, requested)
+		c.JSON(http.StatusForbidden, gin.H{"error": "请求租户与身份租户不一致"})
+		return
+	}
+	workflows, err := h.workflow.ListWorkflows(tenant.ClientContext(c), identity.TenantID)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取工作流列表失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取工作流列表失败"})
 		return
 	}
 	views := make([]workflowView, 0, len(workflows))
@@ -68,21 +77,32 @@ func (h *StudioHandler) ListWorkflows(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"workflows": views})
 }
 
-// CreateWorkflow 新建工作流。
-// 路由：POST /api/v1/studio/workflows {tenant_id, name, description?}
+// CreateWorkflow 新建工作流（租户取可信上下文；请求体 tenant_id 不一致即 403）。
+// 路由：POST /api/v1/studio/workflows {name, description?, tenant_id?}
 func (h *StudioHandler) CreateWorkflow(c *gin.Context) {
 	var req struct {
 		TenantID    string `json:"tenant_id"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.TenantID == "" || req.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id 与 name 不能为空"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name 不能为空"})
 		return
 	}
-	workflow, err := h.workflow.CreateWorkflow(req.TenantID, req.Name, req.Description)
+	identity, ok := tenant.FromGin(c)
+	if !ok || !identity.HasTenant() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少租户上下文"})
+		return
+	}
+	if req.TenantID != "" && req.TenantID != identity.TenantID {
+		log.Printf("[tenant-isolation-denied] 新建工作流租户伪造已拒绝 tenant=%s requested=%s",
+			identity.TenantID, req.TenantID)
+		c.JSON(http.StatusForbidden, gin.H{"error": "请求租户与身份租户不一致"})
+		return
+	}
+	workflow, err := h.workflow.CreateWorkflow(tenant.ClientContext(c), identity.TenantID, req.Name, req.Description)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "新建工作流失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "新建工作流失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"workflow": toWorkflowView(workflow)})
@@ -96,9 +116,9 @@ func (h *StudioHandler) GetWorkflow(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow_id 不能为空"})
 		return
 	}
-	workflow, err := h.workflow.GetWorkflow(workflowID)
+	workflow, err := h.workflow.GetWorkflow(tenant.ClientContext(c), workflowID)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "工作流不存在或查询失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "工作流不存在或查询失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"workflow": toWorkflowView(workflow)})
@@ -119,9 +139,9 @@ func (h *StudioHandler) SaveDraft(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "definition（画布图定义）不能为空"})
 		return
 	}
-	resp, err := h.workflow.SaveDraft(workflowID, string(req.Definition))
+	resp, err := h.workflow.SaveDraft(tenant.ClientContext(c), workflowID, string(req.Definition))
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "保存草稿失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "保存草稿失败"})
 		return
 	}
 	result := gin.H{"ok": resp.Ok, "reason": resp.Reason}
@@ -150,9 +170,9 @@ func (h *StudioHandler) PublishWorkflow(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "非法请求体"})
 		return
 	}
-	resp, err := h.workflow.PublishWorkflow(workflowID, req.Note, req.Operator, req.Canary)
+	resp, err := h.workflow.PublishWorkflow(tenant.ClientContext(c), workflowID, req.Note, req.Operator, req.Canary)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "发布工作流失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "发布工作流失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -187,9 +207,9 @@ func (h *StudioHandler) SetRollout(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "开启灰度时必须指定 canary_version"})
 		return
 	}
-	resp, err := h.workflow.Rollout(workflowID, req.CanaryVersion, req.CanaryPercent, req.Operator)
+	resp, err := h.workflow.Rollout(tenant.ClientContext(c), workflowID, req.CanaryVersion, req.CanaryPercent, req.Operator)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "设置灰度失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "设置灰度失败"})
 		return
 	}
 	result := gin.H{"ok": resp.Ok, "reason": resp.Reason}
@@ -207,9 +227,9 @@ func (h *StudioHandler) ListVersions(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow_id 不能为空"})
 		return
 	}
-	versions, err := h.workflow.ListVersions(workflowID)
+	versions, err := h.workflow.ListVersions(tenant.ClientContext(c), workflowID)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "获取版本列表失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "获取版本列表失败"})
 		return
 	}
 	views := make([]workflowVersionView, 0, len(versions))
@@ -228,9 +248,9 @@ func (h *StudioHandler) GetVersion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow_id 不能为空且 version 必须为正整数"})
 		return
 	}
-	resp, err := h.workflow.GetVersion(workflowID, version)
+	resp, err := h.workflow.GetVersion(tenant.ClientContext(c), workflowID, version)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "查询版本失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "查询版本失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -254,9 +274,9 @@ func (h *StudioHandler) RollbackVersion(c *gin.Context) {
 		Operator string `json:"operator"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	resp, err := h.workflow.RollbackVersion(workflowID, version, req.Operator)
+	resp, err := h.workflow.RollbackVersion(tenant.ClientContext(c), workflowID, version, req.Operator)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "回滚失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "回滚失败"})
 		return
 	}
 	result := gin.H{"ok": resp.Ok, "reason": resp.Reason}
@@ -274,9 +294,9 @@ func (h *StudioHandler) DeleteWorkflow(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "workflow_id 不能为空"})
 		return
 	}
-	resp, err := h.workflow.DeleteWorkflow(workflowID)
+	resp, err := h.workflow.DeleteWorkflow(tenant.ClientContext(c), workflowID)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "删除工作流失败"})
+		c.JSON(httpx.StatusFromGRPC(err), gin.H{"error": "删除工作流失败"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": resp.Ok, "reason": resp.Reason})
