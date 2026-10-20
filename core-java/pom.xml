@@ -29,6 +29,7 @@
         <module>business</module>
         <module>workflow</module>
         <module>report</module>
+        <module>trace</module>
         <module>start</module>
     </modules>
 

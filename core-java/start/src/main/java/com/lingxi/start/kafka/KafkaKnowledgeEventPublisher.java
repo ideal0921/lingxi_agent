@@ -2,6 +2,7 @@ package com.lingxi.start.kafka;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lingxi.common.trace.TraceContext;
 import com.lingxi.knowledge.domain.event.KnowledgeEventPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,6 +49,7 @@ public class KafkaKnowledgeEventPublisher implements KnowledgeEventPublisher {
     public void publishIngest(String docId, String tenantId, String kbId, int version,
                               String fileName, String fileUrl) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("trace_id", TraceContext.traceId());
         payload.put("doc_id", docId);
         payload.put("tenant_id", tenantId == null ? "" : tenantId);
         payload.put("kb_id", kbId);
@@ -60,6 +62,7 @@ public class KafkaKnowledgeEventPublisher implements KnowledgeEventPublisher {
     @Override
     public void publishDelete(String docId, String tenantId, String kbId) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("trace_id", TraceContext.traceId());
         payload.put("doc_id", docId);
         payload.put("tenant_id", tenantId == null ? "" : tenantId);
         payload.put("kb_id", kbId);

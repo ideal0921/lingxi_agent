@@ -31,6 +31,8 @@ dependencies = [
     "grpcio>=1.60",
     # 跨会话长期记忆（M4-4.4：用户级画像摘要存 Redis，异步客户端）
     "redis>=5.0",
+    # API 接口链路追踪（M5-5.9：span 旁路异步批量落 MySQL）
+    "pymysql>=1.1.0",
 ]
 
 [project.optional-dependencies]

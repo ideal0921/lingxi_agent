@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lingxi/gateway-go/internal/client"
+	"github.com/lingxi/gateway-go/internal/trace"
 )
 
 // maxProxyBodyBytes 透传请求体上限（1MB）：管理接口均为小请求体，超出即拒绝，防内存放大。
@@ -45,6 +46,7 @@ func (p *Proxy) Forward(javaPath string) gin.HandlerFunc {
 			Authorization: c.GetHeader("Authorization"),
 			ClientIP:      proxyClientIP(c),
 			UserAgent:     c.GetHeader("User-Agent"),
+			TraceID:       currentTraceID(c),
 		})
 		if err != nil {
 			log.Printf("proxy: 转发失败 path=%s err=%v", javaPath, err)
@@ -57,6 +59,16 @@ func (p *Proxy) Forward(javaPath string) gin.HandlerFunc {
 		c.Status(resp.Status)
 		_, _ = c.Writer.Write(resp.Body)
 	}
+}
+
+// currentTraceID 取当前请求的链路 ID（M5-5.9）：优先自上下文，
+// 其次回落到请求头——ApiLog 中间件会把生成的 ID 回写请求头，
+// 因此即使入站未携带，透传下游时也能拿到网关生成的值。
+func currentTraceID(c *gin.Context) string {
+	if id := trace.FromGin(c); id != "" {
+		return id
+	}
+	return strings.TrimSpace(c.GetHeader(trace.HeaderTraceID))
 }
 
 // resolveJavaPath 将路径模板中的 `:param` 替换为实际路由参数值。

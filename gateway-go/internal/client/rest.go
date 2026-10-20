@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/lingxi/gateway-go/internal/trace"
 )
 
 // RestForwarder 向 Java REST 域转发管理类请求（登录/用户/日志），是网关的「REST 透传」通道。
@@ -36,6 +38,8 @@ type ForwardRequest struct {
 	Authorization string // 原样透传，Java 侧自行校验
 	ClientIP      string
 	UserAgent     string
+	// TraceID 链路 ID（M5-5.9）：透传为下游 `x-trace-id` 头，使 Java 段挂到同一条链。
+	TraceID string
 }
 
 // ForwardResponse Java 侧响应（状态码与响应体原样回传）。
@@ -69,6 +73,9 @@ func (f *RestForwarder) Forward(ctx context.Context, req ForwardRequest) (Forwar
 	}
 	if req.UserAgent != "" {
 		httpReq.Header.Set("User-Agent", req.UserAgent)
+	}
+	if req.TraceID != "" {
+		httpReq.Header.Set(trace.HeaderTraceID, req.TraceID)
 	}
 
 	resp, err := f.client.Do(httpReq)

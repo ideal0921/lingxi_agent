@@ -18,6 +18,8 @@ from app.agent.state import ChatMessage
 from app.config import settings
 from app.gateway.router import gateway
 from app.runtime import get_agent, shutdown
+from app.trace.middleware import trace_middleware
+from app.trace.writer import get_writer
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +114,8 @@ async def _start_suggest_grpc_server() -> Any:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     consumer_tasks: list[asyncio.Task[None]] = []
+    # 链路追踪 writer 先于各消费协程启动：保证启动后产生的 span 都能入队
+    await get_writer().start()
     if settings.kafka_enabled:
         runners = (
             ("会话消息", _run_streaming_consumer),
@@ -138,10 +142,14 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
             pass
     if suggest_server is not None:
         await suggest_server.stop(grace=None)  # 立即停机（不等待在途请求）
+    # 追踪 writer 最后停机：先冲掉已入队 span（drain），保证不丢
+    await get_writer().stop()
     await shutdown()
 
 
 app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+# 注册链路追踪中间件：入站读 x-trace-id 并记 HTTP span（旁路落库，不影响响应）
+app.middleware("http")(trace_middleware)
 
 
 @app.get("/health")

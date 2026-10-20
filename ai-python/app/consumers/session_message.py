@@ -107,14 +107,19 @@ def build_chunk_payload(
     error: str = "",
     interrupted: bool = False,
     reason: str = "",
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """构造流式片段事件体（对 Go 与前端稳定的契约）。
 
     ``interrupted``/``reason``（M4-4.5）仅在**终帧**有值：表示本轮因人工接管而中断。
     与 ``error`` 分开表达——「已转人工」是正常业务态，不应被前端渲染成错误横幅。
+
+    ``tenant_id``（M5-5.9 链路追踪）：AI 域已知会话租户，回带后网关才能把片段 span
+    归属到租户（否则该 span 因租户为空被管理端的租户强过滤排除）。对前端语义无影响。
     """
     return {
         "session_id": session_id,
+        "tenant_id": tenant_id,
         "message_id": message_id,
         "index": index,
         "delta": delta,
@@ -293,7 +298,12 @@ async def handle_session_message(
             await producer.publish(
                 chunk_topic,
                 build_chunk_payload(
-                    event.session_id, ai_message_id, index, agent_event.delta, finished=False
+                    event.session_id,
+                    ai_message_id,
+                    index,
+                    agent_event.delta,
+                    finished=False,
+                    tenant_id=tenant_id,
                 ),
                 key=event.session_id,  # 会话键分区：保证片段有序
             )
@@ -310,7 +320,9 @@ async def handle_session_message(
             collected.append(notice)
             await producer.publish(
                 chunk_topic,
-                build_chunk_payload(event.session_id, ai_message_id, index, notice, finished=False),
+                build_chunk_payload(
+                    event.session_id, ai_message_id, index, notice, finished=False, tenant_id=tenant_id
+                ),
                 key=event.session_id,
             )
             index += 1
@@ -340,6 +352,7 @@ async def handle_session_message(
             error=error,
             interrupted=bool(interrupted_reason),
             reason=interrupted_reason,
+            tenant_id=tenant_id,
         ),
         key=event.session_id,
     )

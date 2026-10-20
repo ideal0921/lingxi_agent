@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lingxi.common.trace.TraceContext;
 import com.lingxi.session.event.SessionEventPublisher;
 import com.lingxi.session.model.SessionMessage;
 
@@ -52,6 +53,8 @@ public class KafkaSessionEventPublisher implements SessionEventPublisher {
     public void publishUserMessage(String sessionId, String tenantId, String userId, String messageId, long seq,
                                    String content, String summary, List<SessionMessage> history) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        // 链路透传（M5-5.9）：把当前 traceId 注入消息体，AI 域消费时可续接同一条链路
+        payload.put("trace_id", TraceContext.traceId());
         payload.put("session_id", sessionId);
         payload.put("tenant_id", tenantId == null ? "" : tenantId);
         payload.put("user_id", userId == null ? "" : userId);

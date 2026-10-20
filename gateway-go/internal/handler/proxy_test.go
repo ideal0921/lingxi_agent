@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/lingxi/gateway-go/internal/client"
+	"github.com/lingxi/gateway-go/internal/middleware"
 )
 
 // newProxyRouter 构造指向指定后端地址的透传测试路由。
@@ -33,6 +34,7 @@ func newProxyRouter(t *testing.T, javaPath string) (*gin.Engine, *httptest.Serve
 			"body":   string(body),
 			"token":  r.Header.Get("Authorization"),
 			"xff":    r.Header.Get("X-Forwarded-For"),
+			"trace":  r.Header.Get("x-trace-id"),
 		})
 	}))
 	t.Cleanup(backend.Close)
@@ -113,6 +115,60 @@ func TestProxyReturns503WhenBackendDown(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("后端不可达应 503，实际 %d", rec.Code)
 	}
+}
+
+// TestProxyForwardsTraceID 链路 ID 透传到下游（M5-5.9）：
+// 下游应收到与网关一致的 `x-trace-id`，使 Java 段挂到同一条链。
+func TestProxyForwardsTraceID(t *testing.T) {
+	t.Run("入站已带则原样透传", func(t *testing.T) {
+		router, _ := newProxyRouter(t, "/api/v1/logs")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
+		req.Header.Set("x-trace-id", "trace-from-client")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		got := decodeBody(t, rec)
+		if got["trace"] != "trace-from-client" {
+			t.Fatalf("下游应收到同一链路 ID，实际 %q", got["trace"])
+		}
+	})
+
+	t.Run("入站缺失时透传网关生成的值", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]string{"trace": r.Header.Get("x-trace-id")})
+		}))
+		t.Cleanup(backend.Close)
+
+		router := gin.New()
+		// 用 ApiLog 中间件模拟网关入口：生成链路 ID 并回写请求头。
+		router.Use(middleware.ApiLog(nil, "lingxi"))
+		proxy := NewProxy(client.NewRestForwarder(backend.URL))
+		router.GET("/api/v1/logs", proxy.Forward("/api/v1/logs"))
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil))
+
+		headerID := rec.Header().Get("X-Trace-Id")
+		if headerID == "" {
+			t.Fatal("网关应生成并回写链路 ID")
+		}
+		got := decodeBody(t, rec)
+		if got["trace"] != headerID {
+			t.Fatalf("下游应收到网关生成的链路 ID: 下游=%q 响应头=%q", got["trace"], headerID)
+		}
+	})
+}
+
+// decodeBody 解析下游回显 JSON。
+func decodeBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]string {
+	t.Helper()
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("响应解析失败: %v", err)
+	}
+	return got
 }
 
 // TestResolveJavaPathKeepsUnknownParams 未知占位（无对应路由参数）替换为空，不 panic。

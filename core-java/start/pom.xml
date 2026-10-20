@@ -67,6 +67,12 @@
             <artifactId>lingxi-report</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- 接口链路追踪域（M5-5.9）：span 采集落库 + 查询 API + traceId 透传装配 -->
+        <dependency>
+            <groupId>com.lingxi</groupId>
+            <artifactId>lingxi-trace</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>

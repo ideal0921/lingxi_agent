@@ -15,11 +15,24 @@ import (
 	"github.com/lingxi/gateway-go/internal/handler"
 	"github.com/lingxi/gateway-go/internal/kafka"
 	"github.com/lingxi/gateway-go/internal/middleware"
+	"github.com/lingxi/gateway-go/internal/trace"
 	"github.com/lingxi/gateway-go/internal/ws"
 )
 
 func main() {
 	cfg := config.Load()
+
+	// 链路追踪写入器（M5-5.9）：旁路异步批量落库；DSN 为空或总开关关闭时为 no-op
+	// （保证无 DB 环境仍能启动）。defer Close 会排空队列残留后关闭连接池。
+	traceWriter := trace.NewWriter(trace.WriterConfig{
+		DSN:           cfg.MySQLDSN,
+		Enabled:       cfg.TraceEnabled,
+		BatchSize:     cfg.TraceBatchSize,
+		FlushInterval: cfg.TraceFlushInterval,
+		QueueSize:     cfg.TraceQueueSize,
+	})
+	traceWriter.Start()
+	defer traceWriter.Close()
 
 	// 会话域 gRPC 客户端（Java 业务域）。
 	sessionClient, err := client.NewSessionService(cfg.SessionServiceAddr)
@@ -50,7 +63,7 @@ func main() {
 	defer func() { _ = reportClient.Close() }()
 
 	router := gin.New()
-	router.Use(gin.Recovery(), middleware.AccessLog())
+	router.Use(gin.Recovery(), middleware.AccessLog(), middleware.ApiLog(traceWriter, cfg.DefaultTenant))
 
 	// 鉴权与租户上下文（M5-5.5）：可信租户身份由 JWT 解析注入，
 	// 之后所有处理器（含 WSS）一律以该身份为唯一租户来源。
@@ -59,6 +72,8 @@ func main() {
 	// 长连接：WSS 会话通道（需租户上下文；不套限流，由心跳/缓冲控流）。
 	hub := ws.NewHub()
 	wsHandler := ws.NewHandler(hub, sessionClient)
+	// WSS 按「每条消息收发」记 span（非连接建立处），故在处理器上注入记录器。
+	wsHandler.SetRecorder(traceWriter)
 	router.GET("/ws", authMiddleware, wsHandler.ServeWS)
 
 	// AI 流式片段消费（M3-3.8）：消费 Kafka chunk 事件并广播至会话连接。
@@ -68,10 +83,10 @@ func main() {
 		consumeCtx, cancelConsume := context.WithCancel(context.Background())
 		defer cancelConsume()
 
-		consumer := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaChunkTopic, cfg.KafkaGroupID, hub)
+		consumer := kafka.NewConsumer(cfg.KafkaBrokers, cfg.KafkaChunkTopic, cfg.KafkaGroupID, hub, traceWriter)
 		go consumer.Run(consumeCtx)
 
-		suggestConsumer := kafka.NewSuggestConsumer(cfg.KafkaBrokers, cfg.KafkaSuggestTopic, cfg.KafkaGroupID, hub)
+		suggestConsumer := kafka.NewSuggestConsumer(cfg.KafkaBrokers, cfg.KafkaSuggestTopic, cfg.KafkaGroupID, hub, traceWriter)
 		go suggestConsumer.Run(consumeCtx)
 	}
 
@@ -103,6 +118,9 @@ func main() {
 	api.POST("/users/:user_id/status", adminOnly, proxy.Forward("/api/v1/users/:user_id/status"))
 	// 系统日志（M5-5.6）：仅 admin
 	api.GET("/logs", adminOnly, proxy.Forward("/api/v1/logs"))
+	// 接口链路追踪（M5-5.9）：列表与链路详情，仅 admin；权威契约在 Java trace 模块
+	api.GET("/traces", adminOnly, proxy.Forward("/api/v1/traces"))
+	api.GET("/traces/:trace_id", adminOnly, proxy.Forward("/api/v1/traces/:trace_id"))
 
 	// 知识库运营（M5-5.6 6.5）：multipart 流式反向代理（仅 admin），
 	// 覆盖 /api/v1/kb/bases 与 /api/v1/kb/documents（含分片上传）全部子路径。

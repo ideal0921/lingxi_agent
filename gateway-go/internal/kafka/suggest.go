@@ -10,9 +10,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	segmentio "github.com/segmentio/kafka-go"
 
+	"github.com/lingxi/gateway-go/internal/trace"
 	"github.com/lingxi/gateway-go/internal/ws"
 )
 
@@ -21,6 +23,8 @@ type SuggestResultEvent struct {
 	SessionID   string   `json:"session_id"`
 	RequestID   string   `json:"request_id"`
 	Suggestions []string `json:"suggestions"`
+	// TraceID 链路 ID（M5-5.9）：由上游消息体注入；缺省即不记 span（缺字段不 panic）。
+	TraceID string `json:"trace_id,omitempty"`
 }
 
 // SuggestBroadcaster 仅向指定会话中指定角色的连接广播下行信封（由 ws.Hub 实现）。
@@ -45,19 +49,24 @@ func ToSuggestEnvelope(event *SuggestResultEvent) *ws.Envelope {
 		Sender:      "agent",
 		RequestID:   event.RequestID,
 		Suggestions: event.Suggestions,
+		// 携带链路 ID，使坐席端下行 WSS span 与后端生成段挂到同一条链。
+		TraceID: event.TraceID,
 	}
 }
 
 // SuggestConsumer 消费异步建议结果并仅推送至坐席端连接。
 type SuggestConsumer struct {
-	reader *segmentio.Reader
-	hub    SuggestBroadcaster
+	reader   *segmentio.Reader
+	hub      SuggestBroadcaster
+	recorder trace.Recorder
 }
 
-// NewSuggestConsumer 创建消费者；brokers 为集群地址，topic/group 为订阅主题与消费组。
-func NewSuggestConsumer(brokers []string, topic, groupID string, hub SuggestBroadcaster) *SuggestConsumer {
+// NewSuggestConsumer 创建消费者；brokers 为集群地址，topic/group 为订阅主题与消费组；
+// recorder 为链路追踪记录器（可为 nil）。
+func NewSuggestConsumer(brokers []string, topic, groupID string, hub SuggestBroadcaster, recorder trace.Recorder) *SuggestConsumer {
 	return &SuggestConsumer{
-		hub: hub,
+		hub:      hub,
+		recorder: recorder,
 		reader: segmentio.NewReader(segmentio.ReaderConfig{
 			Brokers:  brokers,
 			Topic:    topic,
@@ -86,11 +95,16 @@ func (c *SuggestConsumer) Run(ctx context.Context) {
 			log.Printf("kafka: 读取建议结果失败: %v", err)
 			continue
 		}
+		started := time.Now()
 		if event, derr := DecodeSuggestResult(msg.Value); derr != nil {
 			log.Printf("kafka: 跳过非法建议结果消息: %v", derr)
-		} else if event.SessionID != "" {
+		} else {
+			// 消息体含 trace_id 才记 span（缺字段不 panic）。
+			recordKafkaSpan(c.recorder, c.reader.Config().Topic, event.TraceID, "", started, "")
 			// 仅推送该会话的坐席端连接，绝不泄漏给用户端。
-			c.hub.BroadcastToRole(event.SessionID, "agent", ToSuggestEnvelope(event))
+			if event.SessionID != "" {
+				c.hub.BroadcastToRole(event.SessionID, "agent", ToSuggestEnvelope(event))
+			}
 		}
 		if cerr := c.reader.CommitMessages(ctx, msg); cerr != nil && ctx.Err() == nil {
 			log.Printf("kafka: 提交位点失败: %v", cerr)

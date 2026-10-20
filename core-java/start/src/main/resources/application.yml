@@ -92,6 +92,18 @@ lingxi:
   report:
     # 报表域（M5-5.1）：分析存储实现。mysql（默认，本机可用）| clickhouse（预留，切换只换仓储实现）
     store: ${LINGXI_REPORT_STORE:mysql}
+  # 接口链路追踪（M5-5.9）：HTTP/gRPC/Kafka span 采集与查询
+  trace:
+    # 采集开关（生产默认开）：关闭时仅停止落库，traceId 透传与响应头回写不受影响
+    enabled: ${LINGXI_TRACE_ENABLED:true}
+    # 存储实现：mysql（默认，本机可用）；与 lingxi.session.store 同一范式，便于切换
+    store: ${LINGXI_TRACE_STORE:mysql}
+    # 批量写入参数（落库一律旁路异步；队列满则丢弃并计数告警）
+    batch-size: ${LINGXI_TRACE_BATCH_SIZE:200}
+    flush-interval-ms: ${LINGXI_TRACE_FLUSH_INTERVAL_MS:1000}
+    queue-size: ${LINGXI_TRACE_QUEUE_SIZE:10000}
+    # 采样率（本期全量采集，预留后续按比例降采样）
+    sample-rate: ${LINGXI_TRACE_SAMPLE_RATE:1.0}
   # 认证与用户/权限（M5-5.6）：密钥须与 Go 网关 GATEWAY_JWT_SECRET 同值
   auth:
     # 是否启用 REST 认证：生产必须 true；false 仅用于本地免登录联调（开发态身份：租户默认值、角色 admin）

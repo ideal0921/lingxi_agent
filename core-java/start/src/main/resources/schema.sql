@@ -333,3 +333,30 @@ CREATE TABLE IF NOT EXISTS lingxi_session_message (
     PRIMARY KEY (session_id, seq),
     KEY idx_message_id (message_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '会话消息表（M5-5.7 持久化）';
+
+-- M5-5.9 API 接口链路追踪表
+-- 一行 = 一个 span（一次调用）。三端（gateway-go / core-java / ai-python）以同一 trace_id 贯穿，
+-- 管理端按 trace_id 聚合即可还原完整链路时间线。**不落请求/响应体**（PII 合规红线）。
+CREATE TABLE IF NOT EXISTS lingxi_api_trace (
+    span_id        VARCHAR(64)  NOT NULL COMMENT 'Span ID（UUID）',
+    trace_id       VARCHAR(64)  NOT NULL COMMENT '链路 ID（网关生成，三端贯穿）',
+    parent_span_id VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '上游 Span（用于还原调用关系，根为空）',
+    service        VARCHAR(32)  NOT NULL COMMENT '来源服务：gateway-go/core-java/ai-python',
+    component      VARCHAR(16)  NOT NULL COMMENT '调用类型：HTTP/GRPC/KAFKA/WSS',
+    entry          VARCHAR(255) NOT NULL COMMENT '入口标识：HTTP 路径 / gRPC 全限定方法 / Kafka topic',
+    http_method    VARCHAR(16)  NOT NULL DEFAULT '' COMMENT 'HTTP 方法（非 HTTP 为空）',
+    status         VARCHAR(16)  NOT NULL COMMENT '结果：OK/ERROR',
+    status_code    INT          NOT NULL DEFAULT 0 COMMENT '状态码（HTTP 状态码 / gRPC 状态码，无则 0）',
+    tenant_id      VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '租户 ID',
+    user_id        VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '主体 ID',
+    role           VARCHAR(32)  NOT NULL DEFAULT '' COMMENT '角色',
+    client_ip      VARCHAR(64)  NOT NULL DEFAULT '' COMMENT '来源 IP',
+    elapsed_ms     BIGINT       NOT NULL DEFAULT 0 COMMENT '耗时（ms）',
+    error_msg      VARCHAR(512) NOT NULL DEFAULT '' COMMENT '错误摘要（截断，不含请求体）',
+    started_at     BIGINT       NOT NULL COMMENT '开始时间（epoch ms）',
+    PRIMARY KEY (span_id),
+    KEY idx_trace (trace_id),
+    KEY idx_tenant_time (tenant_id, started_at),
+    KEY idx_time (started_at),
+    KEY idx_entry (entry)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = 'API 接口链路追踪 Span 表';

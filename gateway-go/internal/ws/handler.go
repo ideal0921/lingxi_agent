@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/lingxi/gateway-go/internal/httpx"
 	"github.com/lingxi/gateway-go/internal/tenant"
+	"github.com/lingxi/gateway-go/internal/trace"
 )
 
 // upgrader WSS 升级器：允许跨域（前端开发环境）。
@@ -30,11 +32,18 @@ var upgrader = websocket.Upgrader{
 type Handler struct {
 	hub     *Hub
 	session SessionClient
+	// recorder span 记录器（M5-5.9）：按「每条消息收发」记 WSS span，可为 nil。
+	recorder trace.Recorder
 }
 
 // NewHandler 创建 WSS 处理器。
 func NewHandler(hub *Hub, session SessionClient) *Handler {
 	return &Handler{hub: hub, session: session}
+}
+
+// SetRecorder 注入 span 记录器（M5-5.9）；未注入时 WSS 不落链路追踪。
+func (h *Handler) SetRecorder(recorder trace.Recorder) {
+	h.recorder = recorder
 }
 
 // ServeWS 升级 HTTP 连接为 WSS 并接管会话长连接。
@@ -62,8 +71,20 @@ func (h *Handler) ServeWS(c *gin.Context) {
 	}
 
 	client := NewClientWithIdentity(sessionID, conn, h.hub, h.session, role, identity)
+	// 链路 ID（M5-5.9）：WSS 握手不在 HTTP span 范围（/ws 不记 span），
+	// 故按入站头复用或生成一个连接级链路 ID，供后续每条消息 span 与出站 metadata 使用。
+	client.SetTraceID(resolveTraceID(c))
+	client.SetRecorder(h.recorder)
 	log.Printf("ws: 会话 %s 租户 %s 角色 %s 已连接", sessionID, identity.TenantID, role)
 	client.Run()
+}
+
+// resolveTraceID 取链路 ID：优先入站 `x-trace-id`，缺省生成。
+func resolveTraceID(c *gin.Context) string {
+	if id := strings.TrimSpace(c.GetHeader(trace.HeaderTraceID)); id != "" {
+		return id
+	}
+	return trace.ID()
 }
 
 // CreateSession 用户端建会话入口：转发 Java 会话域，返回 session_id 供 WSS 连接。

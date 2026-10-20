@@ -70,6 +70,12 @@ const router = createRouter({
           meta: { title: '系统日志', roles: ['admin'] },
         },
         {
+          path: 'traces',
+          name: 'traces',
+          component: () => import('../views/traces/Index.vue'),
+          meta: { title: '接口链路追踪', roles: ['admin'] },
+        },
+        {
           path: 'users',
           name: 'users',
           component: () => import('../views/users/Index.vue'),

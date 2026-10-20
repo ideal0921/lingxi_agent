@@ -28,9 +28,16 @@ from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, OffsetAndMetadata, TopicPartition
 
+from app.trace.context import bind, current, reset
+from app.trace.span import Span, new_span_id, now_ms
+from app.trace.writer import get_writer
+
 logger = logging.getLogger(__name__)
 
 MessageHandler = Callable[[dict[str, Any]], Awaitable[None]]
+
+# Kafka span 组件标识（与表 lingxi_api_trace 的 component 契约一致）
+_COMPONENT_KAFKA = "KAFKA"
 
 # 并行消费参数：轮询超时需**远小于** ``max_poll_interval_ms``，保证处理长任务期间仍在拉取，
 # 避免被踢出消费组（对比串行路径：处理耗时直接占用 poll 间隔）。
@@ -58,9 +65,17 @@ class KafkaProducer:
         self._producer = producer
 
     async def publish(self, topic: str, payload: dict[str, Any], key: str | None = None) -> None:
-        """发布一条 JSON 消息；未启动或发送失败均抛异常（由调用方决定降级策略）。"""
+        """发布一条 JSON 消息；未启动或发送失败均抛异常（由调用方决定降级策略）。
+
+        链路贯穿：把当前上下文的 ``trace_id`` 注入**消息体字段**（契约规定 Kafka 用消息体
+        而非 header，与既有 ``request_id`` 范式一致）。选择「无 trace_id 时不加该字段」——
+        避免污染非链路消息；且仅当 payload 未自带该字段时注入，用浅拷贝避免修改调用方字典。
+        """
         if self._producer is None:
             raise RuntimeError("Kafka 生产者未启动")
+        trace_id = current().trace_id
+        if trace_id and "trace_id" not in payload:
+            payload = {**payload, "trace_id": trace_id}
         # ensure_ascii=False 保留中文原文，避免前端解码成本与可读性损失
         value = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         await self._producer.send_and_wait(
@@ -208,6 +223,50 @@ def _decode(topic: str, record: Any) -> dict[str, Any] | None:
         return None
 
 
+async def _run_handler_with_trace(
+    topic: str, payload: dict[str, Any], handler: MessageHandler
+) -> None:
+    """在 trace 上下文中执行 ``handler``，并旁路记一条 KAFKA span。
+
+    - 消息体含 ``trace_id`` 时：绑定上下文（供 handler 内生产端注入 trace_id）并记 span；
+    - **缺字段时保持既有行为**（直接调用 handler、不记 span），绝不因缺字段报错；
+    - span 在 handler 结束后统一记录（成功/失败都记），写库走旁路不影响消费循环。
+
+    这是「5 个消费协程统一记 span」的唯一实现点：串行与并行两条泵路径都经此调用。
+    """
+    trace_id = str(payload.get("trace_id") or "").strip()
+    if not trace_id:
+        await handler(payload)
+        return
+    tokens = bind(trace_id)
+    span_id = new_span_id()
+    started = now_ms()
+    status = "OK"
+    error_msg = ""
+    try:
+        await handler(payload)
+    except Exception as exc:
+        status = "ERROR"
+        error_msg = str(exc)
+        raise
+    finally:
+        get_writer().record(
+            Span(
+                span_id=span_id,
+                trace_id=trace_id,
+                component=_COMPONENT_KAFKA,
+                entry=topic,
+                started_at=started,
+                status=status,
+                tenant_id=str(payload.get("tenant_id") or ""),
+                user_id=str(payload.get("user_id") or ""),
+                elapsed_ms=now_ms() - started,
+                error_msg=error_msg,
+            )
+        )
+        reset(tokens)
+
+
 async def _pump_serial(consumer: Any, topic: str, handler: MessageHandler) -> None:
     """串行消费（默认路径）：逐条 ``await``，位点由消费者自动提交。"""
     async for record in consumer:
@@ -215,7 +274,7 @@ async def _pump_serial(consumer: Any, topic: str, handler: MessageHandler) -> No
         if payload is None:
             continue
         try:
-            await handler(payload)
+            await _run_handler_with_trace(topic, payload, handler)
         except Exception:
             logger.exception("消费处理失败 topic=%s offset=%d", topic, record.offset)
 
@@ -245,7 +304,7 @@ async def _pump_parallel(consumer: Any, topic: str, handler: MessageHandler, wor
             if payload is not None:
                 async with gate:  # 并发上限：超出则排队，避免同时打爆下游
                     try:
-                        await handler(payload)
+                        await _run_handler_with_trace(topic, payload, handler)
                     except Exception:
                         logger.exception("消费处理失败 topic=%s offset=%d", topic, record.offset)
             try:

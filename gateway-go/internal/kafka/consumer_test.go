@@ -29,6 +29,29 @@ func TestDecodeChunkRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestChunkTraceIDPassThrough 消息体含 trace_id 时解析并透传到下行信封；
+// 缺字段时解析成功且不 panic（M5-5.9）。
+func TestChunkTraceIDPassThrough(t *testing.T) {
+	withTrace, err := DecodeChunk([]byte(`{"session_id":"s1","message_id":"m1","index":0,"delta":"x","trace_id":"trace-9"}`))
+	if err != nil {
+		t.Fatalf("含 trace_id 解析失败: %v", err)
+	}
+	if withTrace.TraceID != "trace-9" {
+		t.Fatalf("trace_id 解析不符: %q", withTrace.TraceID)
+	}
+	if env := ToEnvelope(withTrace); env.TraceID != "trace-9" {
+		t.Fatalf("下行信封应携带链路 ID: %+v", env)
+	}
+
+	withoutTrace, err := DecodeChunk([]byte(`{"session_id":"s1","message_id":"m1","index":0,"delta":"x"}`))
+	if err != nil {
+		t.Fatalf("缺 trace_id 不应解析失败: %v", err)
+	}
+	if withoutTrace.TraceID != "" || ToEnvelope(withoutTrace).TraceID != "" {
+		t.Fatalf("缺字段时应为空且不 panic: %+v", withoutTrace)
+	}
+}
+
 func TestToEnvelopeMapsChunkFields(t *testing.T) {
 	event := &ChunkEvent{
 		SessionID: "s1", MessageID: "ai-1", Index: 3, Delta: "片段", Finished: true, Error: "boom",

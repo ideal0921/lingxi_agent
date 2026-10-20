@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/lingxi/gateway-go/internal/tenant"
 	sessionv1 "github.com/lingxi/gateway-go/proto/sessionv1"
@@ -175,6 +176,32 @@ func TestHubBroadcastToRole(t *testing.T) {
 
 	// 未注册会话广播应无副作用（不 panic）。
 	hub.BroadcastToRole("unknown", "agent", &Envelope{Type: MsgTypeSuggest})
+}
+
+// TestCallContextCarriesTraceID WSS 出站 gRPC context 携带租户与链路 ID（M5-5.9）。
+func TestCallContextCarriesTraceID(t *testing.T) {
+	hub := NewHub()
+	c := NewClientWithIdentity("s1", nil, hub, &mockSessionClient{}, "agent",
+		tenant.Identity{TenantID: "t1", UserID: "u1", Role: "agent"})
+	t.Cleanup(func() { hub.Unregister(c) })
+	c.SetTraceID("conn-trace")
+
+	md, ok := metadata.FromOutgoingContext(c.callContext(c.messageTraceID(&Envelope{TraceID: "msg-trace"})))
+	if !ok {
+		t.Fatal("应注入出站 metadata")
+	}
+	if got := md.Get(tenant.MetadataTraceID); len(got) != 1 || got[0] != "msg-trace" {
+		t.Fatalf("消息级链路 ID 应优先于连接级: %v", got)
+	}
+	if got := md.Get(tenant.MetadataTenantID); len(got) != 1 || got[0] != "t1" {
+		t.Fatalf("租户 metadata 应保留: %v", got)
+	}
+
+	// 信封未携带 trace_id 时回落连接级。
+	md2, _ := metadata.FromOutgoingContext(c.callContext(c.messageTraceID(&Envelope{})))
+	if got := md2.Get(tenant.MetadataTraceID); len(got) != 1 || got[0] != "conn-trace" {
+		t.Fatalf("应回落连接级链路 ID: %v", got)
+	}
 }
 
 func TestBufferAppendAndAfter(t *testing.T) {

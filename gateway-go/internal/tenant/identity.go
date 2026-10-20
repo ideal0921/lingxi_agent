@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"google.golang.org/grpc/metadata"
+
+	"github.com/lingxi/gateway-go/internal/trace"
 )
 
 // Identity 可信租户身份（网关解析所得，随请求贯穿全链路）。
@@ -31,6 +33,8 @@ const (
 	MetadataTenantID = "x-tenant-id"
 	MetadataUserID   = "x-user-id"
 	MetadataRole     = "x-role"
+	// MetadataTraceID 链路 ID（M5-5.9）：与 HTTP 头同值，由 trace 包统一定义。
+	MetadataTraceID = trace.MetadataTraceID
 )
 
 // WithOutgoing 把租户身份写入出站 gRPC metadata。
@@ -50,4 +54,16 @@ func WithOutgoing(ctx context.Context, identity Identity) context.Context {
 		return ctx
 	}
 	return metadata.AppendToOutgoingContext(ctx, pairs...)
+}
+
+// WithOutgoingTrace 把链路 ID 追加到出站 gRPC metadata（空值不注入）。
+//
+// 与租户身份正交：即使缺少租户（下游会拒绝），链路 ID 也应下传，
+// 以便 Java 侧 TraceInterceptor 能为「被拒的调用」记 span（计划 §六.1）。
+func WithOutgoingTrace(ctx context.Context, traceID string) context.Context {
+	id := strings.TrimSpace(traceID)
+	if id == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, MetadataTraceID, id)
 }

@@ -40,6 +40,15 @@ export GATEWAY_ENABLE_AUTH="${GATEWAY_ENABLE_AUTH:-true}"
 export LINGXI_KAFKA_ENABLED="${LINGXI_KAFKA_ENABLED:-true}"
 export GATEWAY_KAFKA_ENABLED="${GATEWAY_KAFKA_ENABLED:-true}"
 
+# 链路追踪（M5-5.9）：三端直写 MySQL 的连通参数与总开关（Go 侧用 GATEWAY_MYSQL_DSN，Python 侧用 LINGXI_DB_*）
+export LINGXI_TRACE_ENABLED="${LINGXI_TRACE_ENABLED:-true}"
+export LINGXI_DB_HOST="${LINGXI_DB_HOST:-127.0.0.1}"
+export LINGXI_DB_PORT="${LINGXI_DB_PORT:-3306}"
+export LINGXI_DB_USER="${LINGXI_DB_USER:-root}"
+export LINGXI_DB_PASSWORD="${LINGXI_DB_PASSWORD:-ideal0921}"
+export LINGXI_DB_NAME="${LINGXI_DB_NAME:-lingxi}"
+export GATEWAY_MYSQL_DSN="${GATEWAY_MYSQL_DSN:-${LINGXI_DB_USER}:${LINGXI_DB_PASSWORD}@tcp(${LINGXI_DB_HOST}:${LINGXI_DB_PORT})/${LINGXI_DB_NAME}?charset=utf8mb4&parseTime=true&loc=Local}"
+
 # 中间件安装路径（按本机既有环境设定，可用环境变量覆盖）
 NACOS_HOME="${NACOS_HOME:-/Users/ideal/Desktop/software/java/nacos}"
 REDIS_BIN="${REDIS_BIN:-redis-server}"

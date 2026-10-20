@@ -28,6 +28,9 @@ type Envelope struct {
 	MessageID string `json:"message_id,omitempty"`
 	// RequestID 请求标识（suggest 专用，M4-4.6）：三端贯穿，用于同步/异步结果去重
 	RequestID string `json:"request_id,omitempty"`
+	// TraceID 链路 ID（M5-5.9，可选）：消息信封可携带以接入同一链路；
+	// 缺省时按连接上下文补全（WSS span 与出站 gRPC metadata 均取用该值）。
+	TraceID string `json:"trace_id,omitempty"`
 	// Suggestions 回复建议候选（suggest 专用）：仅供坐席端消费，绝不推给用户端
 	Suggestions []string `json:"suggestions,omitempty"`
 	// Index 流式片段序号（chunk 专用，**不使用 omitempty**：0 是合法序号，需显式下发）

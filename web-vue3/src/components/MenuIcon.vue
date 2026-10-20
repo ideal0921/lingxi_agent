@@ -45,6 +45,15 @@
       <path d="M3.6 12h.01" />
       <path d="M3.6 18h.01" />
     </template>
+    <template v-else-if="name === 'traces'">
+      <!-- 接口链路追踪：三节点由连线串联，寓意网关→Java→Python 的调用链 -->
+      <circle cx="6" cy="6" r="2.2" />
+      <circle cx="6" cy="18" r="2.2" />
+      <circle cx="18" cy="12" r="2.2" />
+      <path d="M6 8.2v7.6" />
+      <path d="M8.1 6.9l7.9 4.4" />
+      <path d="M8.1 17.1l7.9-4.4" />
+    </template>
     <template v-else-if="name === 'users'">
       <circle cx="9" cy="8" r="3.2" />
       <path d="M3.5 19.5a5.5 5.5 0 0 1 11 0" />

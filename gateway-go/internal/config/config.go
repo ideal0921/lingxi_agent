@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lingxi/gateway-go/internal/middleware"
 )
@@ -43,6 +44,17 @@ type Config struct {
 	KafkaSuggestTopic string
 	// KafkaGroupID 消费组（多网关实例同组共享分区）。
 	KafkaGroupID string
+
+	// TraceEnabled 链路追踪总开关（M5-5.9）；关闭时网关不采集任何 span。
+	TraceEnabled bool
+	// MySQLDSN span 落库连接串；为空即关闭写入（保证无 DB 环境仍能启动）。
+	MySQLDSN string
+	// TraceBatchSize 满批落库阈值。
+	TraceBatchSize int
+	// TraceFlushInterval 定时落库间隔。
+	TraceFlushInterval time.Duration
+	// TraceQueueSize 有界队列容量（满则丢弃并计数告警）。
+	TraceQueueSize int
 }
 
 // Load 从环境变量加载配置，未设置时使用本地开发默认值。
@@ -62,6 +74,11 @@ func Load() *Config {
 		KafkaChunkTopic:    getEnv("GATEWAY_KAFKA_CHUNK_TOPIC", "lingxi.ai.chunk"),
 		KafkaSuggestTopic:  getEnv("GATEWAY_KAFKA_SUGGEST_TOPIC", "lingxi.ai.suggest.result"),
 		KafkaGroupID:       getEnv("GATEWAY_KAFKA_GROUP_ID", "gateway-go"),
+		TraceEnabled:       getEnv("LINGXI_TRACE_ENABLED", "true") == "true",
+		MySQLDSN:           getEnv("GATEWAY_MYSQL_DSN", ""),
+		TraceBatchSize:     getEnvInt("LINGXI_TRACE_BATCH_SIZE", 100),
+		TraceFlushInterval: time.Duration(getEnvInt("LINGXI_TRACE_FLUSH_INTERVAL_MS", 1000)) * time.Millisecond,
+		TraceQueueSize:     getEnvInt("LINGXI_TRACE_QUEUE_SIZE", 10000),
 	}
 	if cfg.EnableAuth && cfg.JWTSecret == "" {
 		log.Fatal("已开启鉴权（GATEWAY_ENABLE_AUTH=true）但未配置 GATEWAY_JWT_SECRET，拒绝启动")

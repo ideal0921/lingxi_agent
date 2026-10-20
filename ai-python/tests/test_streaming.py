@@ -403,6 +403,8 @@ class TestSessionMessageConsumer:
         chunk = build_chunk_payload("s1", "ai-1", 3, "文本", finished=False)
         assert chunk == {
             "session_id": "s1",
+            # 链路追踪（M5-5.9）：AI 域回带租户，供网关把片段 span 归属到租户
+            "tenant_id": "",
             "message_id": "ai-1",
             "index": 3,
             "delta": "文本",

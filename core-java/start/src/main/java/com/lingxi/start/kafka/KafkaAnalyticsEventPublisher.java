@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lingxi.common.trace.TraceContext;
 import com.lingxi.session.event.AnalyticsEventPublisher;
 
 /**
@@ -73,11 +74,12 @@ public class KafkaAnalyticsEventPublisher implements AnalyticsEventPublisher {
         send(sessionId, payload, "满意度埋点 rating=" + rating);
     }
 
-    /** 统一信封：事件 ID（重投去重键）+ 类型 + 归属 + 发生时间。 */
+    /** 统一信封：事件 ID（重投去重键）+ 类型 + 归属 + 发生时间 + 链路 ID（M5-5.9 透传）。 */
     private static Map<String, Object> envelope(String type, String sessionId, String tenantId) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("event_id", UUID.randomUUID().toString());
         payload.put("type", type);
+        payload.put("trace_id", TraceContext.traceId());
         payload.put("tenant_id", tenantId == null ? "" : tenantId);
         payload.put("session_id", sessionId == null ? "" : sessionId);
         payload.put("occurred_at", System.currentTimeMillis());

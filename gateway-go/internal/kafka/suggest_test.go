@@ -29,6 +29,26 @@ func TestDecodeSuggestResultRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestSuggestTraceIDPassThrough 异步建议结果含 trace_id 时解析并透传；
+// 缺字段时解析成功且不 panic（M5-5.9）。
+func TestSuggestTraceIDPassThrough(t *testing.T) {
+	withTrace, err := DecodeSuggestResult([]byte(`{"session_id":"s1","request_id":"r1","suggestions":["a"],"trace_id":"trace-7"}`))
+	if err != nil {
+		t.Fatalf("含 trace_id 解析失败: %v", err)
+	}
+	if withTrace.TraceID != "trace-7" || ToSuggestEnvelope(withTrace).TraceID != "trace-7" {
+		t.Fatalf("链路 ID 未透传: %+v", withTrace)
+	}
+
+	withoutTrace, err := DecodeSuggestResult([]byte(`{"session_id":"s1","request_id":"r1","suggestions":["a"]}`))
+	if err != nil {
+		t.Fatalf("缺 trace_id 不应解析失败: %v", err)
+	}
+	if withoutTrace.TraceID != "" {
+		t.Fatalf("缺字段时应为空: %+v", withoutTrace)
+	}
+}
+
 func TestToSuggestEnvelopeMapsFields(t *testing.T) {
 	event := &SuggestResultEvent{
 		SessionID: "s1", RequestID: "req-1", Suggestions: []string{"a", "b"},

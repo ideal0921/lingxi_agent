@@ -14,6 +14,7 @@ import com.lingxi.common.security.AuthInterceptor;
 import com.lingxi.common.security.JwtIssuer;
 import com.lingxi.common.security.JwtVerifier;
 import com.lingxi.common.security.RequestMetaFilter;
+import com.lingxi.trace.infrastructure.web.TraceIdFilter;
 
 /**
  * 认证装配（M5-5.6）：口令编码器、JWT 签发/校验器与 REST 认证拦截器。
@@ -67,12 +68,25 @@ public class AuthConfig {
     }
 
     /**
-     * 请求元信息过滤器（最高优先级）：先于认证拦截器执行，保证登录等豁免路径也有来源信息，
-     * 供操作日志审计使用。
+     * 请求元信息过滤器：先于认证拦截器执行，保证登录等豁免路径也有来源信息，
+     * 供操作日志审计使用。顺序紧跟在 {@link #traceIdFilter()} 之后，确保链路上下文先于元信息采集绑定。
      */
     @Bean
     public FilterRegistrationBean<RequestMetaFilter> requestMetaFilter() {
         FilterRegistrationBean<RequestMetaFilter> registration = new FilterRegistrationBean<>(new RequestMetaFilter());
+        registration.addUrlPatterns("/*");
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 1);
+        return registration;
+    }
+
+    /**
+     * 链路 ID 过滤器（M5-5.9，最高优先级）：先于 {@link #requestMetaFilter()} 执行，
+     * 保证 traceId 在请求进入时即绑定，后续过滤器/拦截器/业务均在同一链路上下文内，
+     * 并在响应头回写 {@code X-Trace-Id}。
+     */
+    @Bean
+    public FilterRegistrationBean<TraceIdFilter> traceIdFilter() {
+        FilterRegistrationBean<TraceIdFilter> registration = new FilterRegistrationBean<>(new TraceIdFilter());
         registration.addUrlPatterns("/*");
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         return registration;

@@ -34,3 +34,17 @@ func TestKafkaDefaultsDisabled(t *testing.T) {
 		t.Fatalf("默认片段主题不符: %s", cfg.KafkaChunkTopic)
 	}
 }
+
+func TestTraceDefaults(t *testing.T) {
+	// 链路追踪默认开启，但 DSN 缺省为空 → 写入器降级为 no-op（无 DB 也能启动）
+	cfg := Load()
+	if !cfg.TraceEnabled {
+		t.Fatal("链路追踪默认应开启")
+	}
+	if cfg.MySQLDSN != "" {
+		t.Fatalf("未配置 GATEWAY_MYSQL_DSN 时应为空，实际 %q", cfg.MySQLDSN)
+	}
+	if cfg.TraceBatchSize <= 0 || cfg.TraceQueueSize <= 0 || cfg.TraceFlushInterval <= 0 {
+		t.Fatalf("批量参数默认值应大于 0: %+v", cfg)
+	}
+}

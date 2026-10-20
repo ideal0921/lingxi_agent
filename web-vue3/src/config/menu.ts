@@ -23,6 +23,7 @@ export const MENU_ITEMS: MenuItemConfig[] = [
   { key: 'studio', title: '编排 Studio', path: '/studio', roles: ['admin'] },
   { key: 'kb', title: '知识库', path: '/kb', roles: ['admin'] },
   { key: 'logs', title: '系统日志', path: '/logs', roles: ['admin'] },
+  { key: 'traces', title: '接口链路追踪', path: '/traces', roles: ['admin'] },
   { key: 'users', title: '用户管理', path: '/users', roles: ['admin'] },
 ]
 

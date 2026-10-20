@@ -6,6 +6,7 @@
 
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 显式指向工程根下的 .env：避免相对路径随 CWD 变化而失效
@@ -217,6 +218,21 @@ class Settings(BaseSettings):
     agent_workflow_max_definition_bytes: int = 262144
     # 分支表达式长度上限（白名单求值器拒绝超长表达式）
     agent_workflow_max_expression_length: int = 200
+
+    # API 接口链路追踪（M5-5.9）：span 旁路异步批量落 MySQL，绝不阻断请求与消费循环
+    # trace_enabled=false 时整体 no-op（不落库、不注入消息字段）
+    trace_enabled: bool = True
+    trace_batch_size: int = 100  # 满批即写
+    trace_flush_interval_seconds: float = 2.0  # 未满批时的定时 flush 间隔
+    trace_queue_size: int = 4096  # 有界队列上限，满则丢弃并计数告警
+    # 追踪落库数据库：与 Java application.yml / start-all.sh 同源（共享导出的 LINGXI_DB_*）。
+    # 字段名沿用 `lingxi_db_*`，但 env 变量为 **LINGXI_DB_*** ——故用 validation_alias
+    # 直连（否则 env_prefix 会拼成 LINGXI_LINGXI_DB_*，与 start-all.sh 导出不符）。
+    lingxi_db_host: str = Field(default="127.0.0.1", validation_alias="LINGXI_DB_HOST")
+    lingxi_db_port: int = Field(default=3306, validation_alias="LINGXI_DB_PORT")
+    lingxi_db_user: str = Field(default="root", validation_alias="LINGXI_DB_USER")
+    lingxi_db_password: str = Field(default="", validation_alias="LINGXI_DB_PASSWORD")
+    lingxi_db_name: str = Field(default="lingxi", validation_alias="LINGXI_DB_NAME")
 
 
 settings = Settings()
